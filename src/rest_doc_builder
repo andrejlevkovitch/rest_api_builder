@@ -59,6 +59,17 @@ _G.require = function(package_name)
     return ngx
   elseif package_name == "rest_api_builder" then
     return rest_doc_builder
+  else
+    local universal_object = {}
+    local universal_function = function()
+      return universal_object
+    end
+    -- XXX in case, when before creating api you need upload other modules and call returned objects, then you need
+    -- add this calling methods as mehods of `universal_object`, for example:
+    -- universal_object.get = universal_function
+    -- you don't need add tables, because all getted values from the universal object is other universal object
+
+    return setmetatable(universal_object, {__index = universal_function})
   end
 end
 
