@@ -1,0 +1,12 @@
+version: '3.3'
+services:
+  devserver:
+    image: openresty/openresty:buster-fat
+    container_name: openresty_test
+    volumes:
+      - "./nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf"
+      - "./api:/api"
+      - "../src/rest_api_builder.lua:/api/rest_api_builder.lua"
+    ports:
+      - "17800:80"
+

@@ -1,0 +1,75 @@
+#!/bin/lua
+
+-- @script create documentation from file with rest api, defined by rest_api_builder
+-- @see rest_api_builder
+-- @return json encoded doumentation in standard output
+-- @usage call the script with one argument: name of lua module from which will be created documentation, for example:
+-- ```sh
+-- ./rest_doc_builder api/test
+-- ```
+-- @warning loaded module must be without extension! It must be same as module name for `require`
+--
+local cjson = require("cjson")
+
+local rest_doc_builder = {}
+
+function rest_doc_builder.new()
+  return setmetatable({output = {}}, {__index = rest_doc_builder})
+end
+
+function rest_doc_builder:create_endpoint(api_version,
+                                          method,
+                                          path_signature,
+                                          _,
+                                          description)
+  if self.output[api_version] == nil then
+    self.output[api_version] = {}
+  end
+
+  table.insert(self.output[api_version], {
+    method = method,
+    path_signature = path_signature,
+    description = description,
+  })
+end
+
+function rest_doc_builder:create_endpoint_t(arg_table)
+  return self:create_endpoint(arg_table.api_version, arg_table.method,
+                              arg_table.path_signature, arg_table.callback,
+                              arg_table.description)
+end
+
+function rest_doc_builder:handle_request()
+  return self.output
+end
+
+local ngx = {
+  var = {},
+  req = {
+    get_method = function()
+    end,
+  },
+  unescape_uri = function()
+  end,
+}
+
+local process = require
+_G.require = function(package_name)
+  if package_name == "ngx" then
+    return ngx
+  elseif package_name == "rest_api_builder" then
+    return rest_doc_builder
+  end
+end
+
+local function main()
+  local api_file = arg[1]
+  if api_file == nil then
+    error("you must set name of module for processing as first argument")
+  end
+
+  local documentation = process(api_file)
+  print(cjson.encode(documentation))
+end
+
+main()
