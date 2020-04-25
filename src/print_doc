@@ -1,0 +1,28 @@
+#!/bin/lua
+
+-- @script print json doc to console in plain format
+-- @usage `cat doc.json | ./print_doc`
+--
+local cjson = require("cjson")
+
+local function print_endpoint(endpoint_table)
+  assert(type(endpoint_table) == "table")
+
+  print(endpoint_table.method .. " " .. endpoint_table.path_signature)
+  print(endpoint_table.description)
+end
+
+local function main()
+  local str = io.read("*a")
+  local doc = cjson.decode(str)
+
+  for version, endpoint_list in pairs(doc) do
+    for _, endpoint in ipairs(endpoint_list) do
+      print("version: ", version)
+      print_endpoint(endpoint)
+      print()
+    end
+  end
+end
+
+main()
