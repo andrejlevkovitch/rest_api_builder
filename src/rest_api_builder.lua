@@ -202,7 +202,7 @@ function M:handle_request(method, path)
   handler.handle(special_path_values, ngx.req.get_uri_args(), request_headers,
                  body)
 
-  return ngx.exit(ngx.HTTP_OK)
+  return ngx.exit(ngx.OK)
 end
 
 return M
