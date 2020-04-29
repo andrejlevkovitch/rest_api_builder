@@ -9,7 +9,24 @@ local function print_endpoint(endpoint_table)
   assert(type(endpoint_table) == "table")
 
   print(endpoint_table.method .. " " .. endpoint_table.path_signature)
-  print(endpoint_table.description)
+  if endpoint_table.control_headers then
+    for _, header in ipairs(endpoint_table.control_headers) do
+      local acceptable_values = {}
+      for _, val in ipairs(header.acceptable_values) do
+        table.insert(acceptable_values, val)
+      end
+      local acceptable_values_str = table.concat(acceptable_values, ", ")
+      local is_required_str = "not required"
+      if header.required then
+        is_required_str = "required"
+      end
+      print(header.name .. ": ", is_required_str .. ", ", "accept_values: ",
+            acceptable_values_str)
+    end
+  end
+  if endpoint_table.description then
+    print(endpoint_table.description)
+  end
 end
 
 local function main()

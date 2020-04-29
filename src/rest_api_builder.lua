@@ -3,12 +3,35 @@
 local ngx = require("ngx")
 local M = {}
 
+-- @return true in success, otherwise false
+local function check_type(val, need_type)
+  if need_type == "stringlist" then
+    if type(val) ~= "table" then
+      return false
+    end
+
+    if #val == 0 and next(val) then -- its map
+      return false
+    end
+
+    for _, item in ipairs(val) do
+      if type(item) ~= "string" then
+        return false
+      end
+    end
+
+    return true
+  end
+
+  return type(val) == need_type
+end
+
 local function assert_arg_type(arg, typename, msg)
   if type(typename) == "string" then
-    assert(type(arg) == typename, msg)
-  elseif type(typename) == "table" then
+    assert(check_type(arg, typename), msg)
+  elseif check_type(typename, "stringlist") then
     for _, type_n in ipairs(typename) do
-      if type(arg) == type_n then
+      if check_type(arg, type_n) == true then
         return
       end
     end
@@ -48,6 +71,31 @@ local function create_signature_token_acceptor(signature_token)
   end
 end
 
+-- @return two values: name of header and acceptor function (has parameter as header value)
+local function create_header_acceptor(control_header)
+  return control_header.name, function(header_value)
+    if header_value == nil then
+      if control_header.required then
+        return nil
+      end
+    elseif control_header.acceptable_values then
+      local ok = false
+      for _, acceptable_value in ipairs(control_header.acceptable_values) do
+        if header_value == acceptable_value then
+          ok = true
+          break
+        end
+      end
+
+      if not ok then
+        return nil
+      end
+    end
+
+    return true
+  end
+end
+
 --- check that url path is acceptable by signature
 -- @param signature list of acceptors, created by `create_signature_token_acceptor`
 -- @see create_signature_token_acceptor
@@ -73,8 +121,22 @@ local function check_by_signature(signature, path_token_list)
   return retval_map
 end
 
+-- @param headers table of request headers
+-- @return true in success, otherwise nil
+local function check_by_headers(header_acceptors, headers)
+  for name, acceptor in pairs(header_acceptors) do
+    if acceptor(headers[name]) == nil then
+      return nil
+    end
+  end
+
+  return true
+end
+
 -- @return handler object for specifyed path signature
-local function create_handler_object(signature_str, callback)
+local function create_handler_object(signature_str,
+                                     control_headers,
+                                     callback)
   local signature_token_list = split_url(signature_str)
   local signature = {}
   for _, signature_token in ipairs(signature_token_list) do
@@ -82,26 +144,84 @@ local function create_handler_object(signature_str, callback)
     table.insert(signature, acceptor)
   end
 
+  local header_acceptors = {}
+  for _, header in ipairs(control_headers) do
+    local name, acceptor = create_header_acceptor(header)
+    header_acceptors[name] = acceptor
+  end
+
   return {
     check_signature = function(path_token_list)
       return check_by_signature(signature, path_token_list)
+    end,
+    check_headers = function(headers)
+      return check_by_headers(header_acceptors, headers)
     end,
     handle = callback,
   }
 end
 
+local header_builder = {name = nil, required = nil, acceptable_values = nil}
+
+function header_builder.new(header_name, need_debug)
+  if not need_debug then
+    return setmetatable({
+      name = header_name,
+      assert_arg_type = function()
+      end,
+    }, {__index = header_builder})
+  else
+    return setmetatable({
+      name = header_name,
+      assert_arg_type = assert_arg_type,
+      is_debug = true,
+    }, {__index = header_builder})
+  end
+end
+
+function header_builder:required(is_required)
+  self.assert_arg_type(is_required, "boolean", "required param must be boolean")
+
+  self.required = is_required
+  return self
+end
+
+function header_builder:accept(values)
+  self.assert_arg_type(values, {"string", "stringlist"},
+                       "invalid values in accept method")
+
+  if type(values) == "table" then
+    self.acceptable_values = values
+  else
+    self.acceptable_values = {values}
+  end
+
+  return self
+end
+
 -- @param need_debug boolean, false by default
 function M.new(need_debug)
-  if need_debug then
-    return setmetatable({handlers = {}, assert_arg_type = assert_arg_type},
-                        {__index = M})
-  else
+  if not need_debug then
     return setmetatable({
       handlers = {},
       assert_arg_type = function()
       end,
     }, {__index = M})
+  else
+    return setmetatable({
+      handlers = {},
+      assert_arg_type = assert_arg_type,
+      is_debug = true,
+    }, {__index = M})
   end
+end
+
+--- construct header checker
+-- @return header builder object
+function M:header(header_name)
+  self.assert_arg_type(header_name, "string", "invalid header_name")
+
+  return header_builder.new(header_name, self.is_debug)
 end
 
 -- @param version version of endpoint api
@@ -112,6 +232,7 @@ end
 -- @param callback function, which will call if request path match by signature. First argument is a map with special
 -- values getted from path by signature, second is table of uri_args, third is a headers_table and fourth is a body
 -- @param description
+-- @param control_headers not required, list of check headers, created by header_builder @see header
 -- @usage local foo = function(special_path_values, uri_args, headers, body) ... end
 --        api.create_endpoint("GET", "/hello/<name>", foo)
 -- @see create_endpoint_t
@@ -120,12 +241,16 @@ function M:create_endpoint(version,
                            method,
                            path_signature,
                            callback,
-                           description)
+                           description,
+                           control_headers)
   self.assert_arg_type(version, "string", "invalid version")
   self.assert_arg_type(method, "string", "invalid method")
   self.assert_arg_type(path_signature, "string", "invalid path_signature")
   self.assert_arg_type(callback, "function", "invalid callback")
   self.assert_arg_type(description, {"string", "nil"}, "invalid description")
+
+  self.assert_arg_type(control_headers, {"table", "nil"},
+                       "invalid control_headers")
 
   if self.handlers[version] == nil then
     self.handlers[version] = {}
@@ -135,7 +260,7 @@ function M:create_endpoint(version,
   end
 
   table.insert(self.handlers[version][method],
-               create_handler_object(path_signature, callback))
+               create_handler_object(path_signature, control_headers, callback))
 end
 
 --- same as create_endpoint, but take table as argument
@@ -146,7 +271,7 @@ function M:create_endpoint_t(arg_table)
 
   return self:create_endpoint(arg_table.api_version, arg_table.method,
                               arg_table.path_signature, arg_table.callback,
-                              arg_table.description)
+                              arg_table.description, arg_table.control_headers)
 end
 
 -- @return required handler and map with path special values. If handler not found return nil
@@ -192,6 +317,10 @@ function M:handle_request(method, path)
                                                         method, path)
   if handler == nil then
     return ngx.exit(ngx.HTTP_NOT_FOUND)
+  end
+
+  if handler.check_headers(request_headers) == nil then
+    return ngx.exit(ngx.HTTP_NOT_ACCEPTABLE)
   end
 
   -- XXX at first we need read body

@@ -13,15 +13,41 @@ local cjson = require("cjson")
 
 local rest_doc_builder = {}
 
+local header_builder = {name = nil, required = nil, acceptable_values = nil}
+
+function header_builder.new(header_name)
+  return setmetatable({name = header_name}, {__index = header_builder})
+end
+
+function header_builder:required(is_required)
+  self.required = is_required
+  return self
+end
+
+function header_builder:accept(values)
+  if type(values) == "table" then
+    self.acceptable_values = values
+  else
+    self.acceptable_values = {values}
+  end
+
+  return self
+end
+
 function rest_doc_builder.new()
   return setmetatable({output = {}}, {__index = rest_doc_builder})
+end
+
+function rest_doc_builder:header(header_name)
+  return header_builder.new(header_name)
 end
 
 function rest_doc_builder:create_endpoint(api_version,
                                           method,
                                           path_signature,
                                           _,
-                                          description)
+                                          description,
+                                          control_headers)
   if self.output[api_version] == nil then
     self.output[api_version] = {}
   end
@@ -30,13 +56,14 @@ function rest_doc_builder:create_endpoint(api_version,
     method = method,
     path_signature = path_signature,
     description = description,
+    control_headers = control_headers,
   })
 end
 
 function rest_doc_builder:create_endpoint_t(arg_table)
   return self:create_endpoint(arg_table.api_version, arg_table.method,
                               arg_table.path_signature, arg_table.callback,
-                              arg_table.description)
+                              arg_table.description, arg_table.control_headers)
 end
 
 function rest_doc_builder:handle_request()
