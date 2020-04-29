@@ -58,7 +58,8 @@ function rest_doc_builder:create_endpoint(api_version,
     control_headers = {}
   end
 
-  table.insert(control_headers, self:header(C_VERSION_HEADER_NAME):required(true):accept(api_version))
+  table.insert(control_headers, self:header(C_VERSION_HEADER_NAME)
+                 :required(true):accept(api_version))
 
   table.insert(self.output[api_version], {
     method = method,
@@ -112,6 +113,11 @@ local function main()
   local api_file = arg[1]
   if api_file == nil then
     error("you must set name of module for processing as first argument")
+  end
+
+  if string.match(api_file, "[.]lua$") then
+    -- fix this automaticly
+    api_file = string.sub(api_file, 1, -5)
   end
 
   local documentation = process(api_file)
