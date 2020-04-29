@@ -287,7 +287,12 @@ function M:get_handler(version, method, path)
 
   local path_token_list = split_url(path)
 
-  for _, handler in ipairs(version_handlers[method]) do
+  local method_handlers = version_handlers[method]
+  if method_handlers == nil then
+    return nil
+  end
+
+  for _, handler in ipairs(method_handlers) do
     local special_path_values = handler.check_signature(path_token_list)
     if special_path_values ~= nil then -- handler found
       return handler, special_path_values
