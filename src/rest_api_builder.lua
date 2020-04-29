@@ -256,11 +256,15 @@ function M:create_endpoint(version,
   self.assert_arg_type(control_headers, {"table", "nil"},
                        "invalid control_headers")
 
-  if self.handlers[version] == nil then
+  local version_handlers = self.handlers[version]
+  if version_handlers == nil then
     self.handlers[version] = {}
+    version_handlers = self.handlers[version]
   end
-  if self.handlers[version][method] == nil then
-    self.handlers[version][method] = {}
+  local method_handlers = version_handlers[method]
+  if method_handlers == nil then
+    version_handlers[method] = {}
+    method_handlers = version_handlers[method]
   end
 
   -- add version header as required
@@ -271,18 +275,21 @@ function M:create_endpoint(version,
                  :required(true):accept(version))
 
   -- append handler to handler list
-  table.insert(self.handlers[version][method],
+  table.insert(method_handlers,
                create_handler_object(path_signature, control_headers, callback))
 
   -- also automaticly add data for OPTIONS response
-  if self.options[version] == nil then
+  local version_options = self.options[version]
+  if version_options == nil then
     self.options[version] = {}
+    version_options = self.options[version]
   end
-  if self.options[version][path_signature] == nil then
-    self.options[version][path_signature] = {methods = {}, headers = {}}
+  local path_options = version_options[path_signature]
+  if path_options == nil then
+    version_options[path_signature] = {methods = {}, headers = {}}
+    path_options = version_options[path_signature]
   end
 
-  local path_options = self.options[version][path_signature]
   path_options.methods[method] = true
   for _, header in ipairs(control_headers) do
     path_options.headers[header.name] = true
