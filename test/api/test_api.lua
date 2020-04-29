@@ -21,6 +21,24 @@ api_builder:create_endpoint_t{
   ]],
 }
 
+api_builder:create_endpoint_t{
+  api_version = "v1",
+  method = "PUT",
+  path_signature = "/test/api/<name>",
+
+  control_headers = {api_builder:header("Content-Type"):required(false):accept(
+    {"text/plain", "application/json"})},
+
+  callback = function(sv)
+  end,
+
+  description = [[
+@brief does nothing
+  ]],
+}
+
+api_builder:generate_options_endpoints()
+
 -- api_builder:create_endpoint_t{
 --  api_version = "v1",
 --  method = "GET",

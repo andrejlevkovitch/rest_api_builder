@@ -206,12 +206,14 @@ function M.new(need_debug)
   if not need_debug then
     return setmetatable({
       handlers = {},
+      options = {},
       assert_arg_type = function()
       end,
     }, {__index = M})
   else
     return setmetatable({
       handlers = {},
+      options = {},
       assert_arg_type = assert_arg_type,
       is_debug = true,
     }, {__index = M})
@@ -271,6 +273,20 @@ function M:create_endpoint(version,
   -- append handler to handler list
   table.insert(self.handlers[version][method],
                create_handler_object(path_signature, control_headers, callback))
+
+  -- also automaticly add data for OPTIONS response
+  if self.options[version] == nil then
+    self.options[version] = {}
+  end
+  if self.options[version][path_signature] == nil then
+    self.options[version][path_signature] = {methods = {}, headers = {}}
+  end
+
+  local path_options = self.options[version][path_signature]
+  path_options.methods[method] = true
+  for _, header in ipairs(control_headers) do
+    path_options.headers[header.name] = true
+  end
 end
 
 --- same as create_endpoint, but take table as argument
@@ -282,6 +298,30 @@ function M:create_endpoint_t(arg_table)
   return self:create_endpoint(arg_table.api_version, arg_table.method,
                               arg_table.path_signature, arg_table.callback,
                               arg_table.description, arg_table.control_headers)
+end
+
+--- automaticly create endpoints for handling OPTIONS verb. If you don't need OPTIONS endpoints then don't call it
+function M:generate_options_endpoints()
+  for version, version_options in pairs(self.options) do
+    for path_signature, data_options in pairs(version_options) do
+      local acceptable_methods = {}
+      for method in pairs(data_options.methods) do
+        table.insert(acceptable_methods, method)
+      end
+
+      local acceptable_headers = {}
+      for header in pairs(data_options.headers) do
+        table.insert(acceptable_headers, header)
+      end
+
+      self:create_endpoint(version, "OPTIONS", path_signature, function()
+        ngx.header["Access-Control-Allow-Methods"] =
+          table.concat(acceptable_methods, ", ")
+        ngx.header["Access-Control-Allow-Headers"] =
+          table.concat(acceptable_headers, ", ")
+      end, "@return acceptable verbs and headers for the endpoint")
+    end
+  end
 end
 
 -- @return required handler and map with path special values. If handler not found return nil

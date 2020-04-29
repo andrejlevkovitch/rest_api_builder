@@ -75,6 +75,9 @@ function rest_doc_builder:create_endpoint_t(arg_table)
                               arg_table.description, arg_table.control_headers)
 end
 
+function rest_doc_builder:generate_options_endpoints()
+end
+
 function rest_doc_builder:handle_request()
   return self.output
 end
