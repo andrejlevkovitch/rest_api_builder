@@ -9,9 +9,7 @@ api_builder:create_endpoint_t{
   path_signature = "/test/api/<name>",
 
   control_headers = {api_builder:header("Content-Type"):required(false):accept(
-    {"text/plain", "application/json"}),
-                     api_builder:header("Accept-Version"):required(true):accept(
-    "v1")},
+    {"text/plain", "application/json"})},
 
   callback = function(sv)
     ngx.header["Content-Type"] = "text/plain"

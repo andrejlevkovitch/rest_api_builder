@@ -3,6 +3,8 @@
 local ngx = require("ngx")
 local M = {}
 
+local C_VERSION_HEADER_NAME = "Accept-Version"
+
 -- @return true in success, otherwise false
 local function check_type(val, need_type)
   if need_type == "stringlist" then
@@ -259,6 +261,14 @@ function M:create_endpoint(version,
     self.handlers[version][method] = {}
   end
 
+  -- add version header as required
+  if control_headers == nil then
+    control_headers = {}
+  end
+  table.insert(control_headers, self:header(C_VERSION_HEADER_NAME)
+                 :required(true):accept(version))
+
+  -- append handler to handler list
   table.insert(self.handlers[version][method],
                create_handler_object(path_signature, control_headers, callback))
 end
@@ -313,7 +323,7 @@ function M:handle_request(method, path)
 
   local request_headers = ngx.req.get_headers()
 
-  local request_api_version = request_headers["Accept-Version"]
+  local request_api_version = request_headers[C_VERSION_HEADER_NAME]
   if request_api_version == nil then
     return ngx.exit(ngx.HTTP_NOT_ACCEPTABLE)
   end

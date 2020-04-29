@@ -11,6 +11,8 @@
 --
 local cjson = require("cjson")
 
+local C_VERSION_HEADER_NAME = "Accept-Version"
+
 local rest_doc_builder = {}
 
 local header_builder = {name = nil, required = nil, acceptable_values = nil}
@@ -51,6 +53,12 @@ function rest_doc_builder:create_endpoint(api_version,
   if self.output[api_version] == nil then
     self.output[api_version] = {}
   end
+
+  if control_headers == nil then
+    control_headers = {}
+  end
+
+  table.insert(control_headers, self:header(C_VERSION_HEADER_NAME):required(true):accept(api_version))
 
   table.insert(self.output[api_version], {
     method = method,
