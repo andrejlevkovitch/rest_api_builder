@@ -11,17 +11,21 @@ local function print_endpoint(endpoint_table)
   print(endpoint_table.method .. " " .. endpoint_table.path_signature)
   if endpoint_table.control_headers then
     for _, header in ipairs(endpoint_table.control_headers) do
-      local acceptable_values = {}
-      for _, val in ipairs(header.acceptable_values) do
-        table.insert(acceptable_values, val)
+      local acceptable_values_str = ""
+      if header.acceptable_values then
+        local acceptable_values = {}
+        for _, val in ipairs(header.acceptable_values) do
+          table.insert(acceptable_values, val)
+        end
+        acceptable_values_str = "accept_values: " ..
+                                  table.concat(acceptable_values, ", ")
       end
-      local acceptable_values_str = table.concat(acceptable_values, ", ")
+
       local is_required_str = "not required"
       if header.required then
         is_required_str = "required"
       end
-      print(header.name .. ": ", is_required_str .. ", ", "accept_values: ",
-            acceptable_values_str)
+      print(header.name .. ": ", is_required_str .. ", ", acceptable_values_str)
     end
   end
   if endpoint_table.description then

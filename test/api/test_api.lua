@@ -29,7 +29,7 @@ api_builder:create_endpoint_t{
   control_headers = {api_builder:header("Content-Type"):required(false):accept(
     {"text/plain", "application/json"})},
 
-  callback = function(sv)
+  callback = function()
   end,
 
   description = [[
