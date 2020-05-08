@@ -24,7 +24,13 @@ local documentation = {}
 
 local rest_doc_builder = {}
 
-local header_builder = {name = nil, required = nil, acceptable_values = nil}
+local header_builder = {
+  name = nil,
+  required = nil,
+  acceptable_values = nil,
+  accept_function = nil,
+  error_status = 406,
+}
 
 function header_builder.new(header_name)
   return setmetatable({name = header_name}, {__index = header_builder})
@@ -43,6 +49,9 @@ function header_builder:accept(values)
   end
 
   return self
+end
+
+function header_builder:error_code()
 end
 
 function rest_doc_builder.new()

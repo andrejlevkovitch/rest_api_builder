@@ -78,7 +78,7 @@ local function create_header_acceptor(control_header)
   return control_header.name, function(header_value)
     if header_value == nil then
       if control_header.required then
-        return nil
+        return nil, control_header.error_status
       end
     elseif control_header.acceptable_values then
       local ok = false
@@ -90,7 +90,12 @@ local function create_header_acceptor(control_header)
       end
 
       if not ok then
-        return nil
+        return nil, control_header.error_status
+      end
+    elseif control_header.accept_function then
+      local ok, status = control_header.accept_function(header_value)
+      if not ok then
+        return nil, status or control_header.error_status
       end
     end
 
@@ -124,11 +129,12 @@ local function check_by_signature(signature, path_token_list)
 end
 
 -- @param headers table of request headers
--- @return true in success, otherwise nil
+-- @return true in success, otherwise nil and error http status
 local function check_by_headers(header_acceptors, headers)
   for name, acceptor in pairs(header_acceptors) do
-    if acceptor(headers[name]) == nil then
-      return nil
+    local ok, status = acceptor(headers[name])
+    if ok == nil then
+      return nil, status
     end
   end
 
@@ -163,7 +169,13 @@ local function create_handler_object(signature_str,
   }
 end
 
-local header_builder = {name = nil, required = nil, acceptable_values = nil}
+local header_builder = {
+  name = nil,
+  required = nil,
+  acceptable_values = nil,
+  accept_function = nil,
+  error_status = ngx.HTTP_NOT_ACCEPTABLE,
+}
 
 function header_builder.new(header_name, need_debug)
   if not need_debug then
@@ -188,16 +200,32 @@ function header_builder:required(is_required)
   return self
 end
 
-function header_builder:accept(values)
-  self.assert_arg_type(values, {"string", "stringlist"},
+-- @param param can be: string, stringlist or function. Function get on param: value of header as string - return nil
+-- if header not acceptable or true otherwise. Function can return second value: http status - if not set return status
+-- that was set by error_code method (or default)
+-- @see error_code
+-- @warning second call remove previous values
+function header_builder:accept(param)
+  self.assert_arg_type(param, {"string", "stringlist", "function"},
                        "invalid values in accept method")
 
-  if type(values) == "table" then
-    self.acceptable_values = values
-  else
-    self.acceptable_values = {values}
+  local param_type = type(param)
+  if param_type == "table" then
+    self.acceptable_values = param
+  elseif param_type == "string" then
+    self.acceptable_values = {param}
+  elseif param_type == "function" then
+    self.accept_function = param
   end
 
+  return self
+end
+
+-- @param status http return status that will return if check failed. By default is 406 - "not acceptable"
+function header_builder:error_code(status)
+  self.assert_arg_type(status, "number",
+                       "invalid status in error_code of header_builder")
+  self.error_status = status
   return self
 end
 
@@ -398,8 +426,9 @@ function M:handle_request(method, path)
     return ngx.exit(ngx.HTTP_NOT_FOUND)
   end
 
-  if handler.check_headers(request_headers) == nil then
-    return ngx.exit(ngx.HTTP_NOT_ACCEPTABLE)
+  local headers_ok, status = handler.check_headers(request_headers)
+  if headers_ok == nil then
+    return ngx.exit(status)
   end
 
   -- XXX at first we need read body
