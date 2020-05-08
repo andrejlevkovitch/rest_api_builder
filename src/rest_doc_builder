@@ -1,15 +1,22 @@
 #!/bin/lua
 
 -- @script create documentation from file with rest api, defined by rest_api_builder
+--
 -- @see rest_api_builder
+--
 -- @return json encoded doumentation in standard output
+--
 -- @usage call the script with one argument: name of lua module from which will be created documentation, for example:
 -- ```sh
 -- ./rest_doc_builder api/test
 -- ```
+-- NOTE that if in your script uses some external variables or `require` calls you need add it to `init.lua`, which
+-- will set this variables
+--
 -- @warning loaded module must be without extension! It must be same as module name for `require`
 --
 local cjson = require("cjson")
+pcall(require, "init")
 
 local C_VERSION_HEADER_NAME = "Accept-Version"
 
@@ -44,6 +51,10 @@ function rest_doc_builder:header(header_name)
   return header_builder.new(header_name)
 end
 
+function rest_doc_builder:set_common_headers(control_headers)
+  self.common_headers = control_headers
+end
+
 function rest_doc_builder:create_endpoint(api_version,
                                           method,
                                           path_signature,
@@ -60,6 +71,12 @@ function rest_doc_builder:create_endpoint(api_version,
 
   table.insert(control_headers, self:header(C_VERSION_HEADER_NAME)
                  :required(true):accept(api_version))
+
+  if self.common_headers then
+    for _, header in ipairs(self.common_headers) do
+      table.insert(control_headers, header)
+    end
+  end
 
   table.insert(self.output[api_version], {
     method = method,
@@ -82,33 +99,30 @@ function rest_doc_builder:handle_request()
   return self.output
 end
 
-local ngx = {
-  var = {},
-  req = {
-    get_method = function()
+if package.loaded.ngx == nil then
+  package.loaded.ngx = {
+    var = {},
+    req = {
+      get_method = function()
+      end,
+    },
+    unescape_uri = function()
     end,
-  },
-  unescape_uri = function()
-  end,
-}
+  }
+end
 
 local process = require
 _G.require = function(package_name)
-  if package_name == "ngx" then
-    return ngx
-  elseif package_name == "rest_api_builder" then
+  if package_name == "rest_api_builder" then
     return rest_doc_builder
   else
-    local universal_object = {}
-    local universal_function = function()
-      return universal_object
+    local loaded = package.loaded[package_name]
+    if loaded == nil then
+      error(string.format(
+              "package: %s - not loaded, add this package to init.lua",
+              package_name))
     end
-    -- XXX in case, when before creating api you need upload other modules and call returned objects, then you need
-    -- add this calling methods as mehods of `universal_object`, for example:
-    -- universal_object.get = universal_function
-    -- you don't need add tables, because all getted values from the universal object is other universal object
-
-    return setmetatable(universal_object, {__index = universal_function})
+    return loaded
   end
 end
 
