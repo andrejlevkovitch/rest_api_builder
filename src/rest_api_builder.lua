@@ -209,6 +209,7 @@ function M.new(need_debug)
       options = {},
       assert_arg_type = function()
       end,
+      common_headers = nil,
     }, {__index = M})
   else
     return setmetatable({
@@ -216,6 +217,7 @@ function M.new(need_debug)
       options = {},
       assert_arg_type = assert_arg_type,
       is_debug = true,
+      common_headers = nil,
     }, {__index = M})
   end
 end
@@ -226,6 +228,14 @@ function M:header(header_name)
   self.assert_arg_type(header_name, "string", "invalid header_name")
 
   return header_builder.new(header_name, self.is_debug)
+end
+
+--- set control headers that will be checks for every endpoint, created after calling this function
+-- @warning second call this function rewrite previous headers
+function M:set_common_headers(control_headers)
+  self.assert_arg_type(control_headers, "table", "invalid control_headers")
+
+  self.common_headers = control_headers
 end
 
 -- @param version version of endpoint api
@@ -273,6 +283,13 @@ function M:create_endpoint(version,
   end
   table.insert(control_headers, self:header(C_VERSION_HEADER_NAME)
                  :required(true):accept(version))
+
+  -- and append default control headers if they are set
+  if self.common_headers ~= nil then
+    for _, header in ipairs(self.common_headers) do
+      table.insert(control_headers, header)
+    end
+  end
 
   -- append handler to handler list
   table.insert(method_handlers,
