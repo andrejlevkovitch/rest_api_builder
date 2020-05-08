@@ -52,6 +52,7 @@ function header_builder:accept(values)
 end
 
 function header_builder:error_code()
+  return self
 end
 
 function rest_doc_builder.new()
