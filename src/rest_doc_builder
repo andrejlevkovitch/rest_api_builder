@@ -20,6 +20,8 @@ pcall(require, "init")
 
 local C_VERSION_HEADER_NAME = "Accept-Version"
 
+local documentation = {}
+
 local rest_doc_builder = {}
 
 local header_builder = {name = nil, required = nil, acceptable_values = nil}
@@ -44,7 +46,7 @@ function header_builder:accept(values)
 end
 
 function rest_doc_builder.new()
-  return setmetatable({output = {}}, {__index = rest_doc_builder})
+  return setmetatable({output = documentation}, {__index = rest_doc_builder})
 end
 
 function rest_doc_builder:header(header_name)
@@ -96,7 +98,6 @@ function rest_doc_builder:generate_options_endpoints()
 end
 
 function rest_doc_builder:handle_request()
-  return self.output
 end
 
 if package.loaded.ngx == nil then
@@ -137,7 +138,7 @@ local function main()
     api_file = string.sub(api_file, 1, -5)
   end
 
-  local documentation = process(api_file)
+  process(api_file)
   print(cjson.encode(documentation))
 end
 
