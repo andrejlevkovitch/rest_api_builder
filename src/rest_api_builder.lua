@@ -3,6 +3,11 @@
 local ngx = require("ngx")
 local M = {}
 
+local HTTP_BAD_REQUEST = 400 -- default return status for body_acceptor fail
+local HTTP_NOT_FOUND = 404
+local HTTP_NOT_ACCEPTABLE = 406 -- return in case if api_version not acceptable
+local HTTP_PRECONDITION_FAILED = 412 -- default return status for header_acceptor fail
+
 local C_VERSION_HEADER_NAME = "Accept-Version"
 
 -- @return true in success, otherwise false
@@ -141,10 +146,19 @@ local function check_by_headers(header_acceptors, headers)
   return true
 end
 
+local function check_by_body_acceptor(checker, body)
+  local ok, status = checker(body)
+  if not ok then
+    return nil, status or HTTP_BAD_REQUEST
+  end
+  return true
+end
+
 -- @return handler object for specifyed path signature
 local function create_handler_object(signature_str,
                                      control_headers,
                                      read_body,
+                                     body_acceptor,
                                      callback)
   local signature_token_list = split_url(signature_str)
   local signature = {}
@@ -166,7 +180,12 @@ local function create_handler_object(signature_str,
     check_headers = function(headers)
       return check_by_headers(header_acceptors, headers)
     end,
+
     read_body = read_body,
+    check_body = function(body)
+      return check_by_body_acceptor(body_acceptor, body)
+    end,
+
     handle = callback,
   }
 end
@@ -176,7 +195,7 @@ local header_builder = {
   required = nil,
   acceptable_values = nil,
   accept_function = nil,
-  error_status = ngx.HTTP_NOT_ACCEPTABLE,
+  error_status = HTTP_PRECONDITION_FAILED,
 }
 
 function header_builder.new(header_name, need_debug)
@@ -223,7 +242,7 @@ function header_builder:accept(param)
   return self
 end
 
--- @param status http return status that will return if check failed. By default is 406 - "not acceptable"
+-- @param status http return status that will return if check failed. By default is 412 - "precondition failed"
 function header_builder:error_code(status)
   self.assert_arg_type(status, "number",
                        "invalid status in error_code of header_builder")
@@ -275,6 +294,8 @@ end
 -- argument
 -- @param control_headers not required, list of check headers, created by header_builder @see header
 -- @param read_body boolean, by default is `true`. Set to `false` for don't read a body
+-- @param body_acceptor not required, function that get one argument: request body as string - return true if body
+-- checked or nil and http status if check failed. If returned http status is nil, then set default status 400
 -- @param callback function, which will call if request path match by signature. First argument is a map with special
 -- values getted from path by signature, second is table of uri_args, third is a headers_table and fourth is a body
 -- @param description
@@ -287,6 +308,7 @@ function M:create_endpoint(version,
                            path_signature,
                            control_headers,
                            read_body,
+                           body_acceptor,
                            callback,
                            description)
   self.assert_arg_type(version, "string", "invalid version")
@@ -295,6 +317,8 @@ function M:create_endpoint(version,
   self.assert_arg_type(control_headers, {"table", "nil"},
                        "invalid control_headers")
   self.assert_arg_type(read_body, {"boolean", "nil"}, "invalid read_body")
+  self.assert_arg_type(body_acceptor, {"function", "nil"},
+                       "invalid body_acceptor")
   self.assert_arg_type(callback, "function", "invalid callback")
   self.assert_arg_type(description, {"string", "nil"}, "invalid description")
 
@@ -326,10 +350,17 @@ function M:create_endpoint(version,
   -- by default read_body is true
   read_body = read_body == nil or read_body == true
 
+  -- by default body_acceptor always return true
+  if body_acceptor == nil then
+    body_acceptor = function()
+      return true
+    end
+  end
+
   -- append handler to handler list
-  table.insert(method_handlers, create_handler_object(path_signature,
-                                                      control_headers,
-                                                      read_body, callback))
+  local handler = create_handler_object(path_signature, control_headers,
+                                        read_body, body_acceptor, callback)
+  table.insert(method_handlers, handler)
 
   -- also automaticly add data for OPTIONS response
   local version_options = self.options[version]
@@ -358,7 +389,8 @@ function M:create_endpoint_t(arg_table)
   return self:create_endpoint(arg_table.api_version, arg_table.method,
                               arg_table.path_signature,
                               arg_table.control_headers, arg_table.read_body,
-                              arg_table.callback, arg_table.description)
+                              arg_table.body_acceptor, arg_table.callback,
+                              arg_table.description)
 end
 
 --- automaticly create endpoints for handling OPTIONS verb. If you don't need OPTIONS endpoints then don't call it
@@ -435,13 +467,13 @@ function M:handle_request(method, path)
 
   local request_api_version = request_headers[C_VERSION_HEADER_NAME]
   if request_api_version == nil then
-    return ngx.exit(ngx.HTTP_NOT_ACCEPTABLE)
+    return ngx.exit(HTTP_NOT_ACCEPTABLE)
   end
 
   local handler, special_path_values = self:get_handler(request_api_version,
                                                         method, path)
   if handler == nil then
-    return ngx.exit(ngx.HTTP_NOT_FOUND)
+    return ngx.exit(HTTP_NOT_FOUND)
   end
 
   local headers_ok, status = handler.check_headers(request_headers)
@@ -453,6 +485,11 @@ function M:handle_request(method, path)
   if handler.read_body then
     ngx.req.read_body()
     body = ngx.req.get_body_data()
+  end
+
+  local body_ok, status1 = handler.check_body(body)
+  if body_ok == nil then
+    return ngx.exit(status1)
   end
 
   -- process
