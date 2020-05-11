@@ -144,6 +144,7 @@ end
 -- @return handler object for specifyed path signature
 local function create_handler_object(signature_str,
                                      control_headers,
+                                     read_body,
                                      callback)
   local signature_token_list = split_url(signature_str)
   local signature = {}
@@ -165,6 +166,7 @@ local function create_handler_object(signature_str,
     check_headers = function(headers)
       return check_by_headers(header_acceptors, headers)
     end,
+    read_body = read_body,
     handle = callback,
   }
 end
@@ -271,10 +273,11 @@ end
 -- @param path_signature url signature acceptable by the endpoint. Can contains special values in `<...>` - when path
 -- processes by the signature, then all the special keys will be put in map witch will be passed to callback as first
 -- argument
+-- @param control_headers not required, list of check headers, created by header_builder @see header
+-- @param read_body boolean, by default is `true`. Set to `false` for don't read a body
 -- @param callback function, which will call if request path match by signature. First argument is a map with special
 -- values getted from path by signature, second is table of uri_args, third is a headers_table and fourth is a body
 -- @param description
--- @param control_headers not required, list of check headers, created by header_builder @see header
 -- @usage local foo = function(special_path_values, uri_args, headers, body) ... end
 --        api.create_endpoint("GET", "/hello/<name>", foo)
 -- @see create_endpoint_t
@@ -282,17 +285,18 @@ end
 function M:create_endpoint(version,
                            method,
                            path_signature,
+                           control_headers,
+                           read_body,
                            callback,
-                           description,
-                           control_headers)
+                           description)
   self.assert_arg_type(version, "string", "invalid version")
   self.assert_arg_type(method, "string", "invalid method")
   self.assert_arg_type(path_signature, "string", "invalid path_signature")
-  self.assert_arg_type(callback, "function", "invalid callback")
-  self.assert_arg_type(description, {"string", "nil"}, "invalid description")
-
   self.assert_arg_type(control_headers, {"table", "nil"},
                        "invalid control_headers")
+  self.assert_arg_type(read_body, {"boolean", "nil"}, "invalid read_body")
+  self.assert_arg_type(callback, "function", "invalid callback")
+  self.assert_arg_type(description, {"string", "nil"}, "invalid description")
 
   local version_handlers = self.handlers[version]
   if version_handlers == nil then
@@ -319,9 +323,13 @@ function M:create_endpoint(version,
     end
   end
 
+  -- by default read_body is true
+  read_body = read_body == nil or read_body == true
+
   -- append handler to handler list
-  table.insert(method_handlers,
-               create_handler_object(path_signature, control_headers, callback))
+  table.insert(method_handlers, create_handler_object(path_signature,
+                                                      control_headers,
+                                                      read_body, callback))
 
   -- also automaticly add data for OPTIONS response
   local version_options = self.options[version]
@@ -348,8 +356,9 @@ function M:create_endpoint_t(arg_table)
   self.assert_arg_type(arg_table, "table", "invalid arg_table")
 
   return self:create_endpoint(arg_table.api_version, arg_table.method,
-                              arg_table.path_signature, arg_table.callback,
-                              arg_table.description, arg_table.control_headers)
+                              arg_table.path_signature,
+                              arg_table.control_headers, arg_table.read_body,
+                              arg_table.callback, arg_table.description)
 end
 
 --- automaticly create endpoints for handling OPTIONS verb. If you don't need OPTIONS endpoints then don't call it
@@ -366,12 +375,21 @@ function M:generate_options_endpoints()
         table.insert(acceptable_headers, header)
       end
 
-      self:create_endpoint(version, "OPTIONS", path_signature, function()
-        ngx.header["Access-Control-Allow-Methods"] =
-          table.concat(acceptable_methods, ", ")
-        ngx.header["Access-Control-Allow-Headers"] =
-          table.concat(acceptable_headers, ", ")
-      end, "@return acceptable verbs and headers for the endpoint")
+      self:create_endpoint_t{
+        api_version = version,
+        method = "OPTIONS",
+        path_signature = path_signature,
+        read_body = false,
+
+        callback = function()
+          ngx.header["Access-Control-Allow-Methods"] =
+            table.concat(acceptable_methods, ", ")
+          ngx.header["Access-Control-Allow-Headers"] =
+            table.concat(acceptable_headers, ", ")
+        end,
+
+        description = "@return acceptable verbs and headers for the endpoint\n",
+      }
     end
   end
 end
@@ -431,9 +449,11 @@ function M:handle_request(method, path)
     return ngx.exit(status)
   end
 
-  -- XXX at first we need read body
-  ngx.req.read_body()
-  local body = ngx.req.get_body_data()
+  local body
+  if handler.read_body then
+    ngx.req.read_body()
+    body = ngx.req.get_body_data()
+  end
 
   -- process
   handler.handle(special_path_values, ngx.req.get_uri_args(), request_headers,

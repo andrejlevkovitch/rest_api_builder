@@ -7,9 +7,7 @@ api_builder:create_endpoint_t{
   api_version = "v1",
   method = "GET",
   path_signature = "/test/api/<name>",
-
-  control_headers = {api_builder:header("Content-Type"):required(false):accept(
-    {"text/plain", "application/json"})},
+  read_body = false,
 
   callback = function(sv)
     ngx.header["Content-Type"] = "text/plain"
@@ -25,7 +23,6 @@ api_builder:create_endpoint_t{
   api_version = "v1",
   method = "PUT",
   path_signature = "/test/api/<name>",
-
   control_headers = {api_builder:header("Content-Type"):required(false):accept(
     {"text/plain", "application/json"})},
 
