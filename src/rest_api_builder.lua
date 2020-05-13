@@ -157,7 +157,7 @@ end
 -- @return handler object for specifyed path signature
 local function create_handler_object(signature_str,
                                      control_headers,
-                                     read_body,
+                                     ignore_body,
                                      body_acceptor,
                                      callback)
   local signature_token_list = split_url(signature_str)
@@ -181,7 +181,7 @@ local function create_handler_object(signature_str,
       return check_by_headers(header_acceptors, headers)
     end,
 
-    read_body = read_body,
+    ignore_body = ignore_body,
     check_body = function(body)
       return check_by_body_acceptor(body_acceptor, body)
     end,
@@ -293,7 +293,7 @@ end
 -- processes by the signature, then all the special keys will be put in map witch will be passed to callback as first
 -- argument
 -- @param control_headers not required, list of check headers, created by header_builder @see header
--- @param read_body boolean, by default is `true`. Set to `false` for don't read a body
+-- @param ignore_body boolean, by default is `false`. Set to `true` for don't read a body
 -- @param body_acceptor not required, function that get one argument: request body as string - return true if body
 -- checked or nil and http status if check failed. If returned http status is nil, then set default status 400
 -- @param callback function, which will call if request path match by signature. First argument is a map with special
@@ -307,7 +307,7 @@ function M:create_endpoint(version,
                            method,
                            path_signature,
                            control_headers,
-                           read_body,
+                           ignore_body,
                            body_acceptor,
                            callback,
                            description)
@@ -316,7 +316,7 @@ function M:create_endpoint(version,
   self.assert_arg_type(path_signature, "string", "invalid path_signature")
   self.assert_arg_type(control_headers, {"table", "nil"},
                        "invalid control_headers")
-  self.assert_arg_type(read_body, {"boolean", "nil"}, "invalid read_body")
+  self.assert_arg_type(ignore_body, {"boolean", "nil"}, "invalid ignore_body")
   self.assert_arg_type(body_acceptor, {"function", "nil"},
                        "invalid body_acceptor")
   self.assert_arg_type(callback, "function", "invalid callback")
@@ -347,9 +347,6 @@ function M:create_endpoint(version,
     end
   end
 
-  -- by default read_body is true
-  read_body = read_body == nil or read_body == true
-
   -- by default body_acceptor always return true
   if body_acceptor == nil then
     body_acceptor = function()
@@ -359,7 +356,7 @@ function M:create_endpoint(version,
 
   -- append handler to handler list
   local handler = create_handler_object(path_signature, control_headers,
-                                        read_body, body_acceptor, callback)
+                                        ignore_body, body_acceptor, callback)
   table.insert(method_handlers, handler)
 
   -- also automaticly add data for OPTIONS response
@@ -382,13 +379,13 @@ end
 
 --- same as create_endpoint, but take table as argument
 -- @see create_endpoint
--- @usage api.create_endpoint{method = "GET", path_signature = "/hello/<name>", callback = foo}
+-- @usage api.create_endpoint{api_version = "v1", method = "GET", path_signature = "/hello/<name>", callback = foo}
 function M:create_endpoint_t(arg_table)
   self.assert_arg_type(arg_table, "table", "invalid arg_table")
 
   return self:create_endpoint(arg_table.api_version, arg_table.method,
                               arg_table.path_signature,
-                              arg_table.control_headers, arg_table.read_body,
+                              arg_table.control_headers, arg_table.ignore_body,
                               arg_table.body_acceptor, arg_table.callback,
                               arg_table.description)
 end
@@ -411,7 +408,7 @@ function M:generate_options_endpoints()
         api_version = version,
         method = "OPTIONS",
         path_signature = path_signature,
-        read_body = false,
+        ignore_body = true,
 
         callback = function()
           ngx.header["Access-Control-Allow-Methods"] =
@@ -482,7 +479,7 @@ function M:handle_request(method, path)
   end
 
   local body
-  if handler.read_body then
+  if handler.ignore_body ~= true then
     ngx.req.read_body()
     body = ngx.req.get_body_data()
   end

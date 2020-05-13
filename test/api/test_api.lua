@@ -7,7 +7,7 @@ api_builder:create_endpoint_t{
   api_version = "v1",
   method = "GET",
   path_signature = "/test/api/<name>",
-  read_body = false,
+  ignore_body = true,
 
   callback = function(sv)
     ngx.header["Content-Type"] = "text/plain"
