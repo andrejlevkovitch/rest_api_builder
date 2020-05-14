@@ -322,15 +322,19 @@ local function add_options_info(self,
                                 path_signature,
                                 method,
                                 header_names)
+  -- XXX we can not compare path_signatures as strings, because next signatures: "/tmp/<name>" and "/tmp/<n>" - are same
+  -- so we need transform path_signatures. We don't need values from path in this case, so do it simple:
+  local simplified_signature = string.gsub(path_signature, "<[^>]*>", "<ph>")
+
   local version_options = self.options[version]
   if version_options == nil then
     self.options[version] = {}
     version_options = self.options[version]
   end
-  local path_options = version_options[path_signature]
+  local path_options = version_options[simplified_signature]
   if path_options == nil then
-    version_options[path_signature] = {methods = {}, headers = {}}
-    path_options = version_options[path_signature]
+    version_options[simplified_signature] = {methods = {}, headers = {}}
+    path_options = version_options[simplified_signature]
   end
 
   path_options.methods[method] = true

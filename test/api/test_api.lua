@@ -22,7 +22,7 @@ api_builder:create_endpoint_t{
 api_builder:create_endpoint_t{
   api_version = "v1",
   method = "PUT",
-  path_signature = "/test/api/<name>",
+  path_signature = "/test/api/<n>",
   control_headers = {api_builder:header("Content-Type"):required(false):accept(
     {"text/plain", "application/json"})},
 
