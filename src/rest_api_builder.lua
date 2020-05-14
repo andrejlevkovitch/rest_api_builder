@@ -80,12 +80,17 @@ end
 
 -- @return two values: name of header and acceptor function (has parameter as header value)
 local function create_header_acceptor(control_header)
-  return control_header.name, function(header_value)
-    if header_value == nil then
-      if control_header.required then
-        return nil, control_header.error_status
+  local acceptor
+  if control_header.accept_function then
+    acceptor = function(header_value)
+      local ok, status = control_header.accept_function(header_value)
+      if not ok then
+        return nil, status or control_header.error_status
       end
-    elseif control_header.acceptable_values then
+      return true
+    end
+  elseif control_header.acceptable_values then
+    acceptor = function(header_value)
       local ok = false
       for _, acceptable_value in ipairs(control_header.acceptable_values) do
         if header_value == acceptable_value then
@@ -97,13 +102,20 @@ local function create_header_acceptor(control_header)
       if not ok then
         return nil, control_header.error_status
       end
-    elseif control_header.accept_function then
-      local ok, status = control_header.accept_function(header_value)
-      if not ok then
-        return nil, status or control_header.error_status
-      end
+      return true
     end
+  else
+    acceptor = function()
+      return true
+    end
+  end
 
+  return control_header.name, function(header_value)
+    if header_value then
+      return acceptor(header_value)
+    elseif control_header.required then
+      return nil, control_header.error_status
+    end
     return true
   end
 end
@@ -174,14 +186,14 @@ local function create_handler_object(signature_str,
   end
 
   return {
+    ignore_body = ignore_body,
+
     check_signature = function(path_token_list)
       return check_by_signature(signature, path_token_list)
     end,
     check_headers = function(headers)
       return check_by_headers(header_acceptors, headers)
     end,
-
-    ignore_body = ignore_body,
     check_body = function(body)
       return check_by_body_acceptor(body_acceptor, body)
     end,
@@ -287,6 +299,46 @@ function M:set_common_headers(control_headers)
   self.common_headers = control_headers
 end
 
+-- @return table of handlers. If version or method (or both) tables not exists, then it will be created
+local function get_handler_list(self, version, method)
+  local version_handlers = self.handlers[version]
+  if version_handlers == nil then
+    self.handlers[version] = {[method] = {}}
+    return self.handlers[version][method]
+  end
+
+  local method_handlers = version_handlers[method]
+  if method_handlers == nil then
+    version_handlers[method] = {}
+    return version_handlers[method]
+  end
+
+  return method_handlers
+end
+
+-- @param headers list of header names
+local function add_options_info(self,
+                                version,
+                                path_signature,
+                                method,
+                                header_names)
+  local version_options = self.options[version]
+  if version_options == nil then
+    self.options[version] = {}
+    version_options = self.options[version]
+  end
+  local path_options = version_options[path_signature]
+  if path_options == nil then
+    version_options[path_signature] = {methods = {}, headers = {}}
+    path_options = version_options[path_signature]
+  end
+
+  path_options.methods[method] = true
+  for _, header_name in ipairs(header_names) do
+    path_options.headers[header_name] = true
+  end
+end
+
 -- @param version version of endpoint api
 -- @param method http verb
 -- @param path_signature url signature acceptable by the endpoint. Can contains special values in `<...>` - when path
@@ -322,17 +374,6 @@ function M:create_endpoint(version,
   self.assert_arg_type(callback, "function", "invalid callback")
   self.assert_arg_type(description, {"string", "nil"}, "invalid description")
 
-  local version_handlers = self.handlers[version]
-  if version_handlers == nil then
-    self.handlers[version] = {}
-    version_handlers = self.handlers[version]
-  end
-  local method_handlers = version_handlers[method]
-  if method_handlers == nil then
-    version_handlers[method] = {}
-    method_handlers = version_handlers[method]
-  end
-
   -- add version header as required
   if control_headers == nil then
     control_headers = {}
@@ -357,24 +398,16 @@ function M:create_endpoint(version,
   -- append handler to handler list
   local handler = create_handler_object(path_signature, control_headers,
                                         ignore_body, body_acceptor, callback)
-  table.insert(method_handlers, handler)
+
+  local handlers = get_handler_list(self, version, method)
+  table.insert(handlers, handler)
 
   -- also automaticly add data for OPTIONS response
-  local version_options = self.options[version]
-  if version_options == nil then
-    self.options[version] = {}
-    version_options = self.options[version]
-  end
-  local path_options = version_options[path_signature]
-  if path_options == nil then
-    version_options[path_signature] = {methods = {}, headers = {}}
-    path_options = version_options[path_signature]
-  end
-
-  path_options.methods[method] = true
+  local header_names = {}
   for _, header in ipairs(control_headers) do
-    path_options.headers[header.name] = true
+    table.insert(header_names, header.name)
   end
+  add_options_info(self, version, path_signature, method, header_names)
 end
 
 --- same as create_endpoint, but take table as argument
@@ -457,12 +490,12 @@ function M:get_handler(version, method, path)
     return nil
   end
 
-  local path_token_list = split_url(path)
-
   local method_handlers = version_handlers[method]
   if method_handlers == nil then
     return nil
   end
+
+  local path_token_list = split_url(path)
 
   for _, handler in ipairs(method_handlers) do
     local special_path_values = handler.check_signature(path_token_list)
