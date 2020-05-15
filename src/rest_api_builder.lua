@@ -279,6 +279,7 @@ function M.new(need_debug)
       assert_arg_type = assert_arg_type,
       is_debug = true,
       common_headers = nil,
+      passed_endpoint_signatures = {},
     }, {__index = M})
   end
 end
@@ -316,15 +317,21 @@ local function get_handler_list(self, version, method)
   return method_handlers
 end
 
+--- signatures with different names of special keys can be equal, for example: "/tmp/<name>" and "/tmp/<n>" - this
+-- signatures are eqal, but they are different strings. So, for compare signatures we need simplifyed it
+-- @param path_signature as string
+-- @return simplified signature as string
+local function simplify_signature(path_signature)
+  return string.gsub(path_signature, "<[^>]*>", "<ph>")
+end
+
 -- @param headers list of header names
 local function add_options_info(self,
                                 version,
                                 path_signature,
                                 method,
                                 header_names)
-  -- XXX we can not compare path_signatures as strings, because next signatures: "/tmp/<name>" and "/tmp/<n>" - are same
-  -- so we need transform path_signatures. We don't need values from path in this case, so do it simple:
-  local simplified_signature = string.gsub(path_signature, "<[^>]*>", "<ph>")
+  local simplified_signature = simplify_signature(path_signature)
 
   local version_options = self.options[version]
   if version_options == nil then
@@ -341,6 +348,21 @@ local function add_options_info(self,
   for _, header_name in ipairs(header_names) do
     path_options.headers[header_name] = true
   end
+end
+
+-- @return true if signature was added to list of passed signatures, otherwise return nil - it means that same signature
+-- already added
+local function try_add_unique_endpoint(self, version, method, path_signature)
+  local simplified_signature = simplify_signature(path_signature)
+  local endpoint_signature = table.concat(
+                               {version, method, simplified_signature}, " ")
+
+  if self.passed_endpoint_signatures[endpoint_signature] ~= nil then
+    return nil -- endpoint with same signature already set
+  end
+
+  self.passed_endpoint_signatures[endpoint_signature] = true
+  return true
 end
 
 -- @param version version of endpoint api
@@ -377,6 +399,13 @@ function M:create_endpoint(version,
                        "invalid body_acceptor")
   self.assert_arg_type(callback, "function", "invalid callback")
   self.assert_arg_type(description, {"string", "nil"}, "invalid description")
+
+  if self.is_debug then
+    if try_add_unique_endpoint(self, version, method, path_signature) == nil then
+      error(string.format("endpoint with same signature already set: %s %s %s",
+                          version, method, path_signature))
+    end
+  end
 
   -- add version header as required
   if control_headers == nil then
