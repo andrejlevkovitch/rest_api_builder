@@ -1,1 +1,1 @@
-require("rest_api_builder")
+require("test_api")

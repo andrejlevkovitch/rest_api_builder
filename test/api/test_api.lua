@@ -36,5 +36,4 @@ api_builder:create_endpoint_t{
 
 api_builder:generate_options_endpoints()
 
-return api_builder:handle_request(ngx.req.get_method(),
-                                  ngx.unescape_uri(ngx.var.uri))
+return api_builder
