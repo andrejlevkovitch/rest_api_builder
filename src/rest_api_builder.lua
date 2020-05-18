@@ -3,7 +3,7 @@
 local ngx = require("ngx")
 local M = {}
 
-local HTTP_BAD_REQUEST = 400 -- default return status for body_acceptor fail
+local HTTP_BAD_REQUEST = 400 -- default return status for body_validator fail
 local HTTP_NOT_FOUND = 404
 local HTTP_NOT_ACCEPTABLE = 406 -- return in case if api_version not acceptable
 local HTTP_PRECONDITION_FAILED = 412 -- default return status for header_acceptor fail
@@ -158,19 +158,19 @@ local function check_by_headers(header_acceptors, headers)
   return true
 end
 
-local function check_by_body_acceptor(checker, body)
-  local ok, status = checker(body)
-  if not ok then
+local function check_by_body_validator(validator, body)
+  local out_body, status = validator(body)
+  if body == nil then
     return nil, status or HTTP_BAD_REQUEST
   end
-  return true
+  return out_body
 end
 
 -- @return handler object for specifyed path signature
 local function create_handler_object(signature_str,
                                      control_headers,
                                      ignore_body,
-                                     body_acceptor,
+                                     body_validator,
                                      callback)
   local signature_token_list = split_url(signature_str)
   local signature = {}
@@ -195,7 +195,7 @@ local function create_handler_object(signature_str,
       return check_by_headers(header_acceptors, headers)
     end,
     check_body = function(body)
-      return check_by_body_acceptor(body_acceptor, body)
+      return check_by_body_validator(body_validator, body)
     end,
 
     handle = callback,
@@ -372,8 +372,8 @@ end
 -- argument
 -- @param control_headers not required, list of check headers, created by header_builder @see header
 -- @param ignore_body boolean, by default is `false`. Set to `true` for don't read a body
--- @param body_acceptor not required, function that get one argument: request body as string - return true if body
--- checked or nil and http status if check failed. If returned http status is nil, then set default status 400
+-- @param body_validator not required, function that get one argument: request body as string - return validated body
+-- or nil and http status if check failed. If returned http status is nil, then set default status 400
 -- @param callback function, which will call if request path match by signature. First argument is a map with special
 -- values getted from path by signature, second is table of uri_args, third is a headers_table and fourth is a body
 -- @param description
@@ -386,7 +386,7 @@ function M:create_endpoint(version,
                            path_signature,
                            control_headers,
                            ignore_body,
-                           body_acceptor,
+                           body_validator,
                            callback,
                            description)
   self.assert_arg_type(version, "string", "invalid version")
@@ -395,8 +395,8 @@ function M:create_endpoint(version,
   self.assert_arg_type(control_headers, {"table", "nil"},
                        "invalid control_headers")
   self.assert_arg_type(ignore_body, {"boolean", "nil"}, "invalid ignore_body")
-  self.assert_arg_type(body_acceptor, {"function", "nil"},
-                       "invalid body_acceptor")
+  self.assert_arg_type(body_validator, {"function", "nil"},
+                       "invalid body_validator")
   self.assert_arg_type(callback, "function", "invalid callback")
   self.assert_arg_type(description, {"string", "nil"}, "invalid description")
 
@@ -421,16 +421,16 @@ function M:create_endpoint(version,
     end
   end
 
-  -- by default body_acceptor always return true
-  if body_acceptor == nil then
-    body_acceptor = function()
-      return true
+  -- by default body_validator always return body without any changes
+  if body_validator == nil then
+    body_validator = function(body)
+      return body
     end
   end
 
   -- append handler to handler list
   local handler = create_handler_object(path_signature, control_headers,
-                                        ignore_body, body_acceptor, callback)
+                                        ignore_body, body_validator, callback)
 
   local handlers = get_handler_list(self, version, method)
   table.insert(handlers, handler)
@@ -464,7 +464,7 @@ function M:create_endpoint_t(arg_table)
     for key in pairs(arg_table) do
       if not oneOf(key,
                    {"api_version", "method", "path_signature",
-                    "control_headers", "ignore_body", "body_acceptor",
+                    "control_headers", "ignore_body", "body_validator",
                     "callback", "description"}) then
         self.assert_arg_type(key, "nil",
                              "DBG - unexpected key in arg_table: " .. key)
@@ -475,7 +475,7 @@ function M:create_endpoint_t(arg_table)
   return self:create_endpoint(arg_table.api_version, arg_table.method,
                               arg_table.path_signature,
                               arg_table.control_headers, arg_table.ignore_body,
-                              arg_table.body_acceptor, arg_table.callback,
+                              arg_table.body_validator, arg_table.callback,
                               arg_table.description)
 end
 
@@ -567,15 +567,15 @@ function M:handle_request(method, path)
     return ngx.exit(status)
   end
 
-  local body
-  if handler.ignore_body ~= true then
+  local body = ""
+  if not handler.ignore_body then
     ngx.req.read_body()
     body = ngx.req.get_body_data()
   end
 
-  local body_ok, status1 = handler.check_body(body)
-  if body_ok == nil then
-    return ngx.exit(status1)
+  body, status = handler.check_body(body)
+  if body == nil then
+    return ngx.exit(status)
   end
 
   -- process
