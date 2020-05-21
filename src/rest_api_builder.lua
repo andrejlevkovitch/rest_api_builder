@@ -1,6 +1,8 @@
 -- @module rest_api_builder return object for creating rest api
 --
 local ngx = require("ngx")
+
+--- represent api builder
 local M = {}
 
 local HTTP_BAD_REQUEST = 400 -- default return status for body_filter fail
@@ -120,19 +122,21 @@ local function create_header_acceptor(control_header)
   end
 end
 
+--- represent request handler object
+local handler = {}
+
 --- check that url path is acceptable by signature
--- @param signature list of acceptors, created by `create_signature_token_acceptor`
 -- @see create_signature_token_acceptor
 -- @return if path is acceptable by the signature, then return map which contains signature special keys (as keys) and
 -- path token values (as values). Otherwise return nil
-local function check_by_signature(signature, path_token_list)
-  if #signature ~= #path_token_list then
+function handler:check_signature(path_token_list)
+  if #self.signature ~= #path_token_list then
     return nil
   end
 
   local retval_map = {}
   for i, path_token in ipairs(path_token_list) do
-    local acceptor = signature[i]
+    local acceptor = self.signature[i]
     local ok, key, val = acceptor(path_token)
     if not ok then
       return nil
@@ -147,8 +151,8 @@ end
 
 -- @param headers table of request headers
 -- @return true in success, otherwise nil and error http status
-local function check_by_headers(header_acceptors, headers)
-  for name, acceptor in pairs(header_acceptors) do
+function handler:check_headers(headers)
+  for name, acceptor in pairs(self.header_acceptors) do
     local ok, status = acceptor(headers[name])
     if ok == nil then
       return nil, status
@@ -158,20 +162,28 @@ local function check_by_headers(header_acceptors, headers)
   return true
 end
 
-local function filter_body(filter, body)
-  local out_body, status = filter(body)
+function handler:filter_body(body)
+  local out_body, status = self.body_filter(body)
   if out_body == nil then
     return nil, status or HTTP_BAD_REQUEST
   end
   return out_body
 end
 
+-- @param special_path_values table with keys and values defined by special tokens in uri path (<key>)
+function handler:handle(special_path_values,
+                        uri_args,
+                        request_headers,
+                        body)
+  return self.callback(special_path_values, uri_args, request_headers, body)
+end
+
 -- @return handler object for specifyed path signature
-local function create_handler_object(signature_str,
-                                     control_headers,
-                                     ignore_body,
-                                     body_filter,
-                                     callback)
+function handler.new(signature_str,
+                     control_headers,
+                     ignore_body,
+                     body_filter,
+                     callback)
   local signature_token_list = split_url(signature_str)
   local signature = {}
   for _, signature_token in ipairs(signature_token_list) do
@@ -185,21 +197,13 @@ local function create_handler_object(signature_str,
     header_acceptors[name] = acceptor
   end
 
-  return {
+  return setmetatable({
+    signature = signature,
+    header_acceptors = header_acceptors,
     ignore_body = ignore_body,
-
-    check_signature = function(path_token_list)
-      return check_by_signature(signature, path_token_list)
-    end,
-    check_headers = function(headers)
-      return check_by_headers(header_acceptors, headers)
-    end,
-    filter_body = function(body)
-      return filter_body(body_filter, body)
-    end,
-
-    handle = callback,
-  }
+    body_filter = body_filter,
+    callback = callback,
+  }, {__index = handler})
 end
 
 local header_builder = {
@@ -428,11 +432,11 @@ function M:create_endpoint(version,
   end
 
   -- append handler to handler list
-  local handler = create_handler_object(path_signature, control_headers,
-                                        ignore_body, body_filter, callback)
+  local handler_obj = handler.new(path_signature, control_headers, ignore_body,
+                                  body_filter, callback)
 
   local handlers = get_handler_list(self, version, method)
-  table.insert(handlers, handler)
+  table.insert(handlers, handler_obj)
 
   -- also automaticly add data for OPTIONS response
   local header_names = {}
@@ -478,7 +482,7 @@ function M:create_endpoint_t(arg_table)
                               arg_table.description)
 end
 
---- automaticly create endpoints for handling OPTIONS verb. If you don't need OPTIONS endpoints then don't call it
+--- automaticly create endpoints for handling OPTIONS verb. If you don't need option endpoints, just redefine it
 function M:generate_options_endpoints()
   for version, version_options in pairs(self.options) do
     for path_signature, data_options in pairs(version_options) do
@@ -511,8 +515,11 @@ function M:generate_options_endpoints()
   end
 end
 
+--- represent product of api_builder
+local product_api = {}
+
 -- @return required handler and map with path special values. If handler not found return nil
-function M:get_handler(version, method, path)
+function product_api:get_handler(version, method, path)
   self.assert_arg_type(version, "string", "invalid version")
   self.assert_arg_type(method, "string", "invalid method")
   self.assert_arg_type(path, "string", "invalid path")
@@ -529,10 +536,10 @@ function M:get_handler(version, method, path)
 
   local path_token_list = split_url(path)
 
-  for _, handler in ipairs(method_handlers) do
-    local special_path_values = handler.check_signature(path_token_list)
+  for _, handler_obj in ipairs(method_handlers) do
+    local special_path_values = handler_obj:check_signature(path_token_list)
     if special_path_values ~= nil then -- handler found
-      return handler, special_path_values
+      return handler_obj, special_path_values
     end
   end
 
@@ -544,7 +551,7 @@ end
 -- @param path request path
 -- @warning you must call it after creating endpoints!
 -- @warning path should be unescaped @see ngx.unescape_uri
-function M:handle_request(method, path)
+function product_api:handle_request(method, path)
   self.assert_arg_type(method, "string", "invalid method")
   self.assert_arg_type(path, "string", "invalid path")
 
@@ -555,33 +562,44 @@ function M:handle_request(method, path)
     return ngx.exit(HTTP_NOT_ACCEPTABLE)
   end
 
-  local handler, special_path_values = self:get_handler(request_api_version,
-                                                        method, path)
-  if handler == nil then
+  local handler_obj, special_path_values =
+    self:get_handler(request_api_version, method, path)
+  if handler_obj == nil then
     return ngx.exit(HTTP_NOT_FOUND)
   end
 
-  local headers_ok, status = handler.check_headers(request_headers)
+  local headers_ok, status = handler_obj:check_headers(request_headers)
   if headers_ok == nil then
     return ngx.exit(status)
   end
 
   local body = ""
-  if not handler.ignore_body then
+  if not handler_obj.ignore_body then
     ngx.req.read_body()
     body = ngx.req.get_body_data()
   end
 
-  body, status = handler.filter_body(body)
+  body, status = handler_obj:filter_body(body)
   if body == nil then
     return ngx.exit(status)
   end
 
   -- process
-  handler.handle(special_path_values, ngx.req.get_uri_args(), request_headers,
-                 body)
+  handler_obj:handle(special_path_values, ngx.req.get_uri_args(),
+                     request_headers, body)
 
   return ngx.exit(ngx.OK)
+end
+
+--- finish building and return builded api object
+function M:get_product_api()
+  self:generate_options_endpoints()
+
+  return setmetatable({
+    handlers = self.handlers,
+    is_debug = self.is_debug,
+    assert_arg_type = self.assert_arg_type,
+  }, {__index = product_api})
 end
 
 return M
