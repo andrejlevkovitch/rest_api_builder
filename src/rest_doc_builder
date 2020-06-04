@@ -110,6 +110,9 @@ end
 function rest_doc_builder:handle_request()
 end
 
+function rest_doc_builder:get_product_api()
+end
+
 if package.loaded.ngx == nil then
   package.loaded.ngx = {
     var = {},
