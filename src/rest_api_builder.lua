@@ -575,8 +575,9 @@ function product_api:handle_request(method, path)
 
   local body = ""
   if not handler_obj.ignore_body then
+    -- XXX if content-length set to 0, then we has here `nil` so change it to empty string
     ngx.req.read_body()
-    body = ngx.req.get_body_data()
+    body = ngx.req.get_body_data() or ""
   end
 
   body, status = handler_obj:filter_body(body)
