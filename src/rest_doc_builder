@@ -24,7 +24,7 @@ local documentation = {}
 
 local rest_doc_builder = {}
 
-local header_builder = {
+local filter_builder = {
   name = nil,
   required = nil,
   acceptable_values = nil,
@@ -32,16 +32,20 @@ local header_builder = {
   error_status = 406,
 }
 
-function header_builder.new(header_name)
-  return setmetatable({name = header_name}, {__index = header_builder})
+function filter_builder.new(header_name)
+  return setmetatable({name = header_name}, {__index = filter_builder})
 end
 
-function header_builder:required(is_required)
+function filter_builder:required(is_required)
   self.required = is_required
   return self
 end
 
-function header_builder:accept(values)
+function filter_builder:accept(values)
+  if type(values)  == "function" then
+    return self
+  end
+
   if type(values) == "table" then
     self.acceptable_values = values
   else
@@ -51,7 +55,11 @@ function header_builder:accept(values)
   return self
 end
 
-function header_builder:error_code()
+function filter_builder:error_code()
+  return self
+end
+
+function filter_builder:error_message()
   return self
 end
 
@@ -59,8 +67,8 @@ function rest_doc_builder.new()
   return setmetatable({output = documentation}, {__index = rest_doc_builder})
 end
 
-function rest_doc_builder:header(header_name)
-  return header_builder.new(header_name)
+function rest_doc_builder:filter(header_name)
+  return filter_builder.new(header_name)
 end
 
 function rest_doc_builder:set_common_headers(control_headers)
@@ -81,7 +89,7 @@ function rest_doc_builder:create_endpoint(api_version,
     control_headers = {}
   end
 
-  table.insert(control_headers, self:header(C_VERSION_HEADER_NAME)
+  table.insert(control_headers, self:filter(C_VERSION_HEADER_NAME)
                  :required(true):accept(api_version))
 
   if self.common_headers then
