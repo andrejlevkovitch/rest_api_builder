@@ -12,27 +12,77 @@ local HTTP_PRECONDITION_FAILED = 412 -- default return status for header_accepto
 
 local C_VERSION_HEADER_NAME = "Accept-Version"
 
--- @return true in success, otherwise false
-local function check_type(val, need_type)
-  if need_type == "stringlist" then
-    if type(val) ~= "table" then
+local filter_builder = {
+  name = nil,
+  required = nil,
+  acceptable_values = nil,
+  filter_function = nil,
+  error_status = HTTP_PRECONDITION_FAILED,
+  error_msg = nil,
+}
+
+local filter_metatable = {__index = filter_builder}
+
+local special_type_map = {
+  -- list with string values
+  stringlist = function(arg)
+    if type(arg) ~= "table" then
       return false
     end
 
-    if #val == 0 and next(val) then -- its map
+    if #arg == 0 and next(arg) then -- it is a map
       return false
     end
 
-    for _, item in ipairs(val) do
+    for _, item in ipairs(arg) do
       if type(item) ~= "string" then
         return false
       end
     end
 
     return true
-  end
+  end,
 
-  return type(val) == need_type
+  filter = function(arg)
+    local mt = getmetatable(arg)
+
+    if mt == filter_metatable then
+      return true
+    else
+      return false
+    end
+  end,
+
+  filterlist = function(arg)
+    if type(arg) ~= "table" then
+      return false
+    end
+
+    for _, filter in ipairs(arg) do
+      local mt = getmetatable(filter)
+      if mt ~= filter_metatable then
+        return false
+      end
+    end
+
+    return true
+  end,
+}
+
+setmetatable(special_type_map, {
+  __index = function(_, typename) -- default_checker
+    return function(val)
+      return type(val) == typename
+    end
+  end,
+  __newindex = function()
+    error("not for changing")
+  end,
+})
+
+-- @return true in success, otherwise false
+local function check_type(val, need_type)
+  return special_type_map[need_type](val)
 end
 
 local function assert_arg_type(arg, typename, msg)
@@ -80,43 +130,48 @@ local function create_signature_token_acceptor(signature_token)
   end
 end
 
--- @return two values: name of header and acceptor function (has parameter as header value)
-local function create_header_acceptor(control_header)
+-- @return two values: name of parameter and acceptor function (has one argument - parameter value)
+local function create_param_filter(control_param)
   local acceptor
-  if control_header.accept_function then
-    acceptor = function(header_value)
-      local ok, status = control_header.accept_function(header_value)
-      if not ok then
-        return nil, status or control_header.error_status
+  if control_param.filter_function then
+    acceptor = function(param_value)
+      local val, status, msg = control_param.filter_function(param_value)
+
+      if not val then
+        assert_arg_type(status, {"number", "nil"})
+        assert_arg_type(msg, {"string", "nil"})
+
+        return nil, status or control_param.error_status,
+               msg or control_param.error_msg
       end
-      return true
+      return val
     end
-  elseif control_header.acceptable_values then
-    acceptor = function(header_value)
-      local ok = false
-      for _, acceptable_value in ipairs(control_header.acceptable_values) do
-        if header_value == acceptable_value then
-          ok = true
+  elseif control_param.acceptable_values then
+    acceptor = function(param_value)
+      local found
+      for _, acceptable_value in ipairs(control_param.acceptable_values) do
+        if param_value == acceptable_value then
+          found = param_value
           break
         end
       end
 
-      if not ok then
-        return nil, control_header.error_status
+      if not found then
+        return nil, control_param.error_status, control_param.error_msg
       end
-      return true
+      return found
     end
   else
-    acceptor = function()
-      return true
+    acceptor = function(param_value)
+      return param_value
     end
   end
 
-  return control_header.name, function(header_value)
-    if header_value then
-      return acceptor(header_value)
-    elseif control_header.required then
-      return nil, control_header.error_status
+  return control_param.name, function(param_value)
+    if param_value then
+      return acceptor(param_value)
+    elseif control_param.required then
+      return nil, control_param.error_status, control_param.error_msg
     end
     return true
   end
@@ -150,13 +205,41 @@ function handler:check_signature(path_token_list)
 end
 
 -- @param headers table of request headers
--- @return true in success, otherwise nil and error http status
-function handler:check_headers(headers)
-  for name, acceptor in pairs(self.header_acceptors) do
-    local ok, status = acceptor(headers[name])
-    if ok == nil then
-      return nil, status
+-- @return true in success, otherwise nil, error http status and error message (optional)
+function handler:filter_headers(headers)
+  for name, filter in pairs(self.header_filters) do
+    local filtered, status, msg = filter(headers[name])
+    if filtered == nil then
+      return nil, status, msg
     end
+
+    headers[name] = filtered
+  end
+
+  return true
+end
+
+function handler:filter_arguments(arguments)
+  for name, filter in pairs(self.argument_filters) do
+    local filtered, status, msg = filter(arguments[name])
+    if filtered == nil then
+      return nil, status, msg
+    end
+
+    arguments[name] = filtered
+  end
+
+  return true
+end
+
+function handler:filter_path_vars(path_vars)
+  for name, filter in pairs(self.path_filters) do
+    local filtered, status, msg = filter(path_vars[name])
+    if filtered == nil then
+      return nil, status, msg
+    end
+
+    path_vars[name] = filtered
   end
 
   return true
@@ -180,7 +263,9 @@ end
 
 -- @return handler object for specifyed path signature
 function handler.new(signature_str,
+                     control_path_vars,
                      control_headers,
+                     control_arguments,
                      ignore_body,
                      body_filter,
                      callback)
@@ -191,78 +276,92 @@ function handler.new(signature_str,
     table.insert(signature, acceptor)
   end
 
-  local header_acceptors = {}
+  local path_filters = {}
+  for _, path_variable in ipairs(control_path_vars) do
+    local name, acceptor = create_param_filter(path_variable)
+    path_filters[name] = acceptor
+  end
+
+  local header_filters = {}
   for _, header in ipairs(control_headers) do
-    local name, acceptor = create_header_acceptor(header)
-    header_acceptors[name] = acceptor
+    local name, acceptor = create_param_filter(header)
+    header_filters[name] = acceptor
+  end
+
+  local argument_filters = {}
+  for _, argument in ipairs(control_arguments) do
+    local name, acceptor = create_param_filter(argument)
+    argument_filters[name] = acceptor
   end
 
   return setmetatable({
     signature = signature,
-    header_acceptors = header_acceptors,
+    path_filters = path_filters,
+    header_filters = header_filters,
+    argument_filters = argument_filters,
     ignore_body = ignore_body,
     body_filter = body_filter,
     callback = callback,
   }, {__index = handler})
 end
 
-local header_builder = {
-  name = nil,
-  required = nil,
-  acceptable_values = nil,
-  accept_function = nil,
-  error_status = HTTP_PRECONDITION_FAILED,
-}
-
-function header_builder.new(header_name, need_debug)
+function filter_builder.new(param_name, need_debug)
   if not need_debug then
     return setmetatable({
-      name = header_name,
+      name = param_name,
       assert_arg_type = function()
       end,
-    }, {__index = header_builder})
+    }, filter_metatable)
   else
     return setmetatable({
-      name = header_name,
+      name = param_name,
       assert_arg_type = assert_arg_type,
       is_debug = true,
-    }, {__index = header_builder})
+    }, filter_metatable)
   end
 end
 
-function header_builder:required(is_required)
+function filter_builder:required(is_required)
   self.assert_arg_type(is_required, "boolean", "required param must be boolean")
 
   self.required = is_required
   return self
 end
 
--- @param param can be: string, stringlist or function. Function get on param: value of header as string - return nil
--- if header not acceptable or true otherwise. Function can return second value: http status - if not set return status
--- that was set by error_code method (or default)
+-- @param acceptor can be: string, stringlist or function. Function get one param: value of param as string - return nil
+-- if param not acceptable or params value otherwise. Function can return second and third values: http status (set
+-- instead of default status) and error message (string)
 -- @see error_code
 -- @warning second call remove previous values
-function header_builder:accept(param)
-  self.assert_arg_type(param, {"string", "stringlist", "function"},
+function filter_builder:accept(acceptor)
+  self.assert_arg_type(acceptor, {"string", "stringlist", "function"},
                        "invalid values in accept method")
 
-  local param_type = type(param)
-  if param_type == "table" then
-    self.acceptable_values = param
-  elseif param_type == "string" then
-    self.acceptable_values = {param}
-  elseif param_type == "function" then
-    self.accept_function = param
+  local acceptor_type = type(acceptor)
+  if acceptor_type == "table" then
+    self.acceptable_values = acceptor
+  elseif acceptor_type == "string" then
+    self.acceptable_values = {acceptor}
+  elseif acceptor_type == "function" then
+    self.filter_function = acceptor
   end
 
   return self
 end
 
 -- @param status http return status that will return if check failed. By default is 412 - "precondition failed"
-function header_builder:error_code(status)
+function filter_builder:error_code(status)
   self.assert_arg_type(status, "number",
-                       "invalid status in error_code of header_builder")
+                       "invalid status in error_code of filter_builder")
   self.error_status = status
+  return self
+end
+
+-- @param msg default error message
+function filter_builder:error_message(msg)
+  self.assert_arg_type(msg, {"string"},
+                       "invalid message in error_message of filter_builder")
+  self.error_msg = msg
   return self
 end
 
@@ -288,12 +387,12 @@ function M.new(need_debug)
   end
 end
 
---- construct header checker
--- @return header builder object
-function M:header(header_name)
-  self.assert_arg_type(header_name, "string", "invalid header_name")
+--- construct param checker
+-- @return param builder object
+function M:filter(param_name)
+  self.assert_arg_type(param_name, "string", "invalid param_name")
 
-  return header_builder.new(header_name, self.is_debug)
+  return filter_builder.new(param_name, self.is_debug)
 end
 
 --- set control headers that will be checks for every endpoint, created after calling this function
@@ -374,7 +473,9 @@ end
 -- @param path_signature url signature acceptable by the endpoint. Can contains special values in `<...>` - when path
 -- processes by the signature, then all the special keys will be put in map witch will be passed to callback as first
 -- argument
--- @param control_headers not required, list of check headers, created by header_builder @see header
+-- @param control_path_vars not required, list of filters for path values, created by filter_builder @see filter
+-- @param control_headers not required, list of filters for headers, created by filter_builder @see filter
+-- @param control_arguments not required, list of filters, created by argument_builder @see filter
 -- @param ignore_body boolean, by default is `false`. Set to `true` for don't read a body
 -- @param body_filter not required, function that get one argument: request body as string - return filtered body
 -- or nil and http status if check failed. If returned http status is nil, then set default status 400
@@ -388,7 +489,9 @@ end
 function M:create_endpoint(version,
                            method,
                            path_signature,
+                           control_path_vars,
                            control_headers,
+                           control_arguments,
                            ignore_body,
                            body_filter,
                            callback,
@@ -396,8 +499,12 @@ function M:create_endpoint(version,
   self.assert_arg_type(version, "string", "invalid version")
   self.assert_arg_type(method, "string", "invalid method")
   self.assert_arg_type(path_signature, "string", "invalid path_signature")
-  self.assert_arg_type(control_headers, {"table", "nil"},
+  self.assert_arg_type(control_path_vars, {"filterlist", "nil"},
+                       "invalid control_path_vars")
+  self.assert_arg_type(control_headers, {"filterlist", "nil"},
                        "invalid control_headers")
+  self.assert_arg_type(control_arguments, {"filterlist", "nil"},
+                       "invalid control_arguments")
   self.assert_arg_type(ignore_body, {"boolean", "nil"}, "invalid ignore_body")
   self.assert_arg_type(body_filter, {"function", "nil"}, "invalid body_filter")
   self.assert_arg_type(callback, "function", "invalid callback")
@@ -410,11 +517,15 @@ function M:create_endpoint(version,
     end
   end
 
+  if control_path_vars == nil then
+    control_path_vars = {}
+  end
+
   -- add version header as required
   if control_headers == nil then
     control_headers = {}
   end
-  table.insert(control_headers, self:header(C_VERSION_HEADER_NAME)
+  table.insert(control_headers, self:filter(C_VERSION_HEADER_NAME)
                  :required(true):accept(version))
 
   -- and append default control headers if they are set
@@ -422,6 +533,11 @@ function M:create_endpoint(version,
     for _, header in ipairs(self.common_headers) do
       table.insert(control_headers, header)
     end
+  end
+
+  -- set default empty table for control_arguments
+  if control_arguments == nil then
+    control_arguments = {}
   end
 
   -- by default body_filter always return body without any changes
@@ -432,8 +548,9 @@ function M:create_endpoint(version,
   end
 
   -- append handler to handler list
-  local handler_obj = handler.new(path_signature, control_headers, ignore_body,
-                                  body_filter, callback)
+  local handler_obj = handler.new(path_signature, control_path_vars,
+                                  control_headers, control_arguments,
+                                  ignore_body, body_filter, callback)
 
   local handlers = get_handler_list(self, version, method)
   table.insert(handlers, handler_obj)
@@ -467,8 +584,8 @@ function M:create_endpoint_t(arg_table)
     for key in pairs(arg_table) do
       if not oneOf(key,
                    {"api_version", "method", "path_signature",
-                    "control_headers", "ignore_body", "body_filter", "callback",
-                    "description"}) then
+                    "control_path_vars", "control_headers", "control_arguments",
+                    "ignore_body", "body_filter", "callback", "description"}) then
         self.assert_arg_type(key, "nil",
                              "DBG - unexpected key in arg_table: " .. key)
       end
@@ -477,9 +594,11 @@ function M:create_endpoint_t(arg_table)
 
   return self:create_endpoint(arg_table.api_version, arg_table.method,
                               arg_table.path_signature,
-                              arg_table.control_headers, arg_table.ignore_body,
-                              arg_table.body_filter, arg_table.callback,
-                              arg_table.description)
+                              arg_table.control_path_vars,
+                              arg_table.control_headers,
+                              arg_table.control_arguments,
+                              arg_table.ignore_body, arg_table.body_filter,
+                              arg_table.callback, arg_table.description)
 end
 
 --- automaticly create endpoints for handling OPTIONS verb. If you don't need option endpoints, just redefine it
@@ -568,11 +687,48 @@ function product_api:handle_request(method, path)
     return ngx.exit(HTTP_NOT_FOUND)
   end
 
-  local headers_ok, status = handler_obj:check_headers(request_headers)
-  if headers_ok == nil then
-    return ngx.exit(status)
+  -- check special_path_values
+  local spec_vars_ok, http_status, err =
+    handler_obj:filter_path_vars(special_path_values)
+  if spec_vars_ok == nil then
+    ngx.status = http_status
+
+    if err then
+      ngx.print(err)
+    end
+
+    return ngx.exit(ngx.HTTP_OK)
   end
 
+  -- check headers
+  local headers_ok, status, err_msg =
+    handler_obj:filter_headers(request_headers)
+  if headers_ok == nil then
+    ngx.status = status
+
+    if err_msg then
+      ngx.print(err_msg)
+    end
+
+    return ngx.exit(ngx.HTTP_OK)
+  end
+
+  -- check arguments
+  local request_arguments = ngx.req.get_uri_args()
+
+  local arguments_ok, status_1, err_msg_1 =
+    handler_obj:filter_arguments(request_arguments)
+  if arguments_ok == nil then
+    ngx.status = status_1
+
+    if err_msg_1 then
+      ngx.print(err_msg_1)
+    end
+
+    return ngx.exit(ngx.HTTP_OK)
+  end
+
+  -- filter body
   local body = ""
   if not handler_obj.ignore_body then
     -- XXX if content-length set to 0, then we has here `nil` so change it to empty string
@@ -586,8 +742,8 @@ function product_api:handle_request(method, path)
   end
 
   -- process
-  handler_obj:handle(special_path_values, ngx.req.get_uri_args(),
-                     request_headers, body)
+  handler_obj:handle(special_path_values, request_arguments, request_headers,
+                     body)
 
   return ngx.exit(ngx.OK)
 end
