@@ -111,14 +111,29 @@ local function split_url(url)
   return token_list
 end
 
--- @return function, which assept path_token as first and second arguments and return true if
--- path_token acceptable by signature and nil if not. If signature_token contains special key (`<...>`) then it return
--- 3 values: true, signature_key, path_value
+-- @return function, which assept path_token as first and second arguments and return true if -- path_token acceptable
+-- by signature and nil if not. If signature_token contains special key (`<...>`) then it return 3 values:
+-- true, signature_key, path_value. Special key must contains name of output variable (signature_key) and, also, can
+-- has regular expresion for path_value, for example: <name=^\\w{3}$> - accept only path_values that contains directly
+-- 3 letters. If signature token does not contain `=` then regex is default: ".*"
 local function create_signature_token_acceptor(signature_token)
-  if string.match(signature_token, "^<%w+>$") ~= nil then -- special key
-    local key = string.match(signature_token, "%w+")
+  if string.match(signature_token, "^<[^>]+>$") ~= nil then -- special key
+    local key = string.match(signature_token, "<(%w+)")
+    local regex = string.match(signature_token, "=(.*)>")
+    if regex then -- check regular expresion
+      local _, err = ngx.re.match("", regex)
+      if err then
+        error("bad regular expresion: " .. regex)
+      end
+    else
+      regex = ".*"
+    end
     return function(path_token)
-      return true, key, path_token
+      local out = ngx.re.match(path_token, regex)
+      if out == nil then
+        return nil
+      end
+      return true, key, out[0]
     end
   else
     return function(path_token)
@@ -232,19 +247,6 @@ function handler:filter_arguments(arguments)
   return true
 end
 
-function handler:filter_path_vars(path_vars)
-  for name, filter in pairs(self.path_filters) do
-    local filtered, status, msg = filter(path_vars[name])
-    if filtered == nil then
-      return nil, status, msg
-    end
-
-    path_vars[name] = filtered
-  end
-
-  return true
-end
-
 function handler:filter_body(body)
   local out_body, status = self.body_filter(body)
   if out_body == nil then
@@ -263,7 +265,6 @@ end
 
 -- @return handler object for specifyed path signature
 function handler.new(signature_str,
-                     control_path_vars,
                      control_headers,
                      control_arguments,
                      ignore_body,
@@ -274,12 +275,6 @@ function handler.new(signature_str,
   for _, signature_token in ipairs(signature_token_list) do
     local acceptor = create_signature_token_acceptor(signature_token)
     table.insert(signature, acceptor)
-  end
-
-  local path_filters = {}
-  for _, path_variable in ipairs(control_path_vars) do
-    local name, acceptor = create_param_filter(path_variable)
-    path_filters[name] = acceptor
   end
 
   local header_filters = {}
@@ -296,7 +291,6 @@ function handler.new(signature_str,
 
   return setmetatable({
     signature = signature,
-    path_filters = path_filters,
     header_filters = header_filters,
     argument_filters = argument_filters,
     ignore_body = ignore_body,
@@ -489,7 +483,6 @@ end
 function M:create_endpoint(version,
                            method,
                            path_signature,
-                           control_path_vars,
                            control_headers,
                            control_arguments,
                            ignore_body,
@@ -499,8 +492,6 @@ function M:create_endpoint(version,
   self.assert_arg_type(version, "string", "invalid version")
   self.assert_arg_type(method, "string", "invalid method")
   self.assert_arg_type(path_signature, "string", "invalid path_signature")
-  self.assert_arg_type(control_path_vars, {"filterlist", "nil"},
-                       "invalid control_path_vars")
   self.assert_arg_type(control_headers, {"filterlist", "nil"},
                        "invalid control_headers")
   self.assert_arg_type(control_arguments, {"filterlist", "nil"},
@@ -515,10 +506,6 @@ function M:create_endpoint(version,
       error(string.format("endpoint with same signature already set: %s %s %s",
                           version, method, path_signature))
     end
-  end
-
-  if control_path_vars == nil then
-    control_path_vars = {}
   end
 
   -- add version header as required
@@ -548,9 +535,9 @@ function M:create_endpoint(version,
   end
 
   -- append handler to handler list
-  local handler_obj = handler.new(path_signature, control_path_vars,
-                                  control_headers, control_arguments,
-                                  ignore_body, body_filter, callback)
+  local handler_obj = handler.new(path_signature, control_headers,
+                                  control_arguments, ignore_body, body_filter,
+                                  callback)
 
   local handlers = get_handler_list(self, version, method)
   table.insert(handlers, handler_obj)
@@ -584,8 +571,8 @@ function M:create_endpoint_t(arg_table)
     for key in pairs(arg_table) do
       if not oneOf(key,
                    {"api_version", "method", "path_signature",
-                    "control_path_vars", "control_headers", "control_arguments",
-                    "ignore_body", "body_filter", "callback", "description"}) then
+                    "control_headers", "control_arguments", "ignore_body",
+                    "body_filter", "callback", "description"}) then
         self.assert_arg_type(key, "nil",
                              "DBG - unexpected key in arg_table: " .. key)
       end
@@ -594,7 +581,6 @@ function M:create_endpoint_t(arg_table)
 
   return self:create_endpoint(arg_table.api_version, arg_table.method,
                               arg_table.path_signature,
-                              arg_table.control_path_vars,
                               arg_table.control_headers,
                               arg_table.control_arguments,
                               arg_table.ignore_body, arg_table.body_filter,
@@ -685,19 +671,6 @@ function product_api:handle_request(method, path)
     self:get_handler(request_api_version, method, path)
   if handler_obj == nil then
     return ngx.exit(HTTP_NOT_FOUND)
-  end
-
-  -- check special_path_values
-  local spec_vars_ok, http_status, err =
-    handler_obj:filter_path_vars(special_path_values)
-  if spec_vars_ok == nil then
-    ngx.status = http_status
-
-    if err then
-      ngx.print(err)
-    end
-
-    return ngx.exit(ngx.HTTP_OK)
   end
 
   -- check headers
