@@ -144,6 +144,8 @@ local function create_signature_token_acceptor(signature_token)
 end
 
 -- @return two values: name of parameter and acceptor function (has one argument - parameter value)
+-- @warning acceptor function return filtered value in case of success, nil and status (and can be message) in case of
+-- error, and nil in case if value is not required and it is not set
 local function create_param_filter(control_param)
   local acceptor
   if control_param.filter_function then
@@ -186,7 +188,7 @@ local function create_param_filter(control_param)
     elseif control_param.is_required then
       return nil, control_param.error_status, control_param.error_msg
     end
-    return true
+    return nil
   end
 end
 
@@ -222,7 +224,8 @@ end
 function handler:filter_headers(headers)
   for name, filter in pairs(self.header_filters) do
     local filtered, status, msg = filter(headers[name])
-    if filtered == nil then
+    -- NOTE that header can be not required, then it return nil, but without status and message
+    if filtered == nil and status ~= nil then
       return nil, status, msg
     end
 
@@ -235,7 +238,8 @@ end
 function handler:filter_arguments(arguments)
   for name, filter in pairs(self.argument_filters) do
     local filtered, status, msg = filter(arguments[name])
-    if filtered == nil then
+    -- NOTE that argument can be not required, then it return nil, but without status and message
+    if filtered == nil and status ~= nil then
       return nil, status, msg
     end
 
