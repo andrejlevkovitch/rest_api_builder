@@ -14,7 +14,7 @@ local C_VERSION_HEADER_NAME = "Accept-Version"
 
 local filter_builder = {
   name = nil,
-  required = nil,
+  is_required = nil,
   acceptable_values = nil,
   filter_function = nil,
   error_status = HTTP_PRECONDITION_FAILED,
@@ -120,20 +120,18 @@ local function create_signature_token_acceptor(signature_token)
   if string.match(signature_token, "^<[^>]+>$") ~= nil then -- special key
     local key = string.match(signature_token, "<(%w+)")
     local regex = string.match(signature_token, "=(.*)>")
-    if regex then -- check regular expresion
-      local _, err = ngx.re.match("", regex)
-      if err then
-        error("bad regular expresion: " .. regex)
-      end
-    else
+    -- XXX don't try check regex as `ngx.re.match("", regex)` - some versions of openresty don't support regex in init
+    -- phase
+    if not regex then -- set default regex
       regex = ".*"
     end
     return function(path_token)
-      local out = ngx.re.match(path_token, regex)
+      local out, err = ngx.re.match(path_token, regex)
       if out == nil then
+        ngx.log(ngx.ERR, "invalid regex: ", err)
         return nil
       end
-      return true, key, out[0]
+      return true, key, path_token
     end
   else
     return function(path_token)
@@ -185,7 +183,7 @@ local function create_param_filter(control_param)
   return control_param.name, function(param_value)
     if param_value then
       return acceptor(param_value)
-    elseif control_param.required then
+    elseif control_param.is_required then
       return nil, control_param.error_status, control_param.error_msg
     end
     return true
@@ -318,7 +316,7 @@ end
 function filter_builder:required(is_required)
   self.assert_arg_type(is_required, "boolean", "required param must be boolean")
 
-  self.required = is_required
+  self.is_required = is_required
   return self
 end
 
