@@ -80,6 +80,7 @@ function rest_doc_builder:create_endpoint(api_version,
                                           path_signature,
                                           _,
                                           description,
+                                          control_arguments,
                                           control_headers)
   if self.output[api_version] == nil then
     self.output[api_version] = {}
@@ -87,6 +88,10 @@ function rest_doc_builder:create_endpoint(api_version,
 
   if control_headers == nil then
     control_headers = {}
+  end
+
+  if control_arguments == nil then
+    control_arguments = {}
   end
 
   table.insert(control_headers, self:filter(C_VERSION_HEADER_NAME)
@@ -103,13 +108,14 @@ function rest_doc_builder:create_endpoint(api_version,
     path_signature = path_signature,
     description = description,
     control_headers = control_headers,
+    control_arguments = control_arguments
   })
 end
 
 function rest_doc_builder:create_endpoint_t(arg_table)
   return self:create_endpoint(arg_table.api_version, arg_table.method,
                               arg_table.path_signature, arg_table.callback,
-                              arg_table.description, arg_table.control_headers)
+                              arg_table.description, arg_table.control_arguments, arg_table.control_headers)
 end
 
 function rest_doc_builder:generate_options_endpoints()
@@ -119,6 +125,9 @@ function rest_doc_builder:handle_request()
 end
 
 function rest_doc_builder:get_product_api()
+end
+
+function rest_doc_builder:set_error_handler()
 end
 
 if package.loaded.ngx == nil then

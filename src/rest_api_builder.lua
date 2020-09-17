@@ -3,7 +3,16 @@
 local ngx = require("ngx")
 
 --- represent api builder
-local M = {}
+local M = {
+  -- default error handler just print error message to body as plain text
+  error_handler = function(http_code, msg)
+    ngx.status = http_code
+    if msg then
+      ngx.header["Content-Type"] = "text/plain"
+      ngx.print(msg)
+    end
+  end,
+}
 
 local HTTP_BAD_REQUEST = 400 -- default return status for body_filter fail
 local HTTP_NOT_FOUND = 404
@@ -250,9 +259,9 @@ function handler:filter_arguments(arguments)
 end
 
 function handler:filter_body(body)
-  local out_body, status = self.body_filter(body)
+  local out_body, status, err_msg = self.body_filter(body)
   if out_body == nil then
-    return nil, status or HTTP_BAD_REQUEST
+    return nil, status or HTTP_BAD_REQUEST, err_msg
   end
   return out_body
 end
@@ -474,7 +483,7 @@ end
 -- @param control_arguments not required, list of filters, created by argument_builder @see filter
 -- @param ignore_body boolean, by default is `false`. Set to `true` for don't read a body
 -- @param body_filter not required, function that get one argument: request body as string - return filtered body
--- or nil and http status if check failed. If returned http status is nil, then set default status 400
+-- or nil, http status and error message if check failed. If returned http status is nil, then set default status 400
 -- @param callback function, which will call if request path match by signature. First argument is a map with special
 -- values getted from path by signature, second is table of uri_args, third is a headers_table and fourth is a body
 -- @param description
@@ -589,6 +598,14 @@ function M:create_endpoint_t(arg_table)
                               arg_table.callback, arg_table.description)
 end
 
+-- @param err_handler must be a function. After calling the handler script will terminate. The handler has two params:
+-- http_code (required) and err_msg (not required). If you not set you own handler will use default, that just print
+-- error message in response body as plain text
+function M:set_error_handler(err_handler)
+  self.assert_arg_type(err_handler, "function", "invalid error handler")
+  self.error_handler = err_handler
+end
+
 --- automaticly create endpoints for handling OPTIONS verb. If you don't need option endpoints, just redefine it
 function M:generate_options_endpoints()
   for version, version_options in pairs(self.options) do
@@ -623,7 +640,7 @@ function M:generate_options_endpoints()
 end
 
 --- represent product of api_builder
-local product_api = {}
+local product_api = {error_handler = nil}
 
 -- @return required handler and map with path special values. If handler not found return nil
 function product_api:get_handler(version, method, path)
@@ -666,26 +683,20 @@ function product_api:handle_request(method, path)
 
   local request_api_version = request_headers[C_VERSION_HEADER_NAME]
   if request_api_version == nil then
-    return ngx.exit(HTTP_NOT_ACCEPTABLE)
+    return self.error_handler(HTTP_NOT_ACCEPTABLE, "no version")
   end
 
   local handler_obj, special_path_values =
     self:get_handler(request_api_version, method, path)
   if handler_obj == nil then
-    return ngx.exit(HTTP_NOT_FOUND)
+    return self.error_handler(HTTP_NOT_FOUND, "not found")
   end
 
   -- check headers
   local headers_ok, status, err_msg =
     handler_obj:filter_headers(request_headers)
   if headers_ok == nil then
-    ngx.status = status
-
-    if err_msg then
-      ngx.print(err_msg)
-    end
-
-    return ngx.exit(ngx.HTTP_OK)
+    return self.error_handler(status, err_msg)
   end
 
   -- check arguments
@@ -694,13 +705,7 @@ function product_api:handle_request(method, path)
   local arguments_ok, status_1, err_msg_1 =
     handler_obj:filter_arguments(request_arguments)
   if arguments_ok == nil then
-    ngx.status = status_1
-
-    if err_msg_1 then
-      ngx.print(err_msg_1)
-    end
-
-    return ngx.exit(ngx.HTTP_OK)
+    return self.error_handler(status_1, err_msg_1)
   end
 
   -- filter body
@@ -711,9 +716,9 @@ function product_api:handle_request(method, path)
     body = ngx.req.get_body_data() or ""
   end
 
-  body, status = handler_obj:filter_body(body)
+  body, status, err_msg = handler_obj:filter_body(body)
   if body == nil then
-    return ngx.exit(status)
+    return self.error_handler(status, err_msg)
   end
 
   -- process
@@ -731,6 +736,7 @@ function M:get_product_api()
     handlers = self.handlers,
     is_debug = self.is_debug,
     assert_arg_type = self.assert_arg_type,
+    error_handler = self.error_handler,
   }, {__index = product_api})
 end
 
