@@ -156,44 +156,55 @@ end
 -- @warning acceptor function return filtered value in case of success, nil and status (and can be message) in case of
 -- error, and nil in case if value is not required and it is not set
 local function create_param_filter(control_param)
-  local acceptor
-  if control_param.filter_function then
-    acceptor = function(param_value)
-      local val, status, msg = control_param.filter_function(param_value)
-
-      if not val then
-        assert_arg_type(status, {"number", "nil"})
-        assert_arg_type(msg, {"string", "nil"})
-
-        return nil, status or control_param.error_status,
-               msg or control_param.error_msg
+  local filter_by_acceptor_type = {
+    ["string"] = function(param_value)
+      if param_value == control_param.acceptor then
+        return param_value
       end
-      return val
-    end
-  elseif control_param.acceptable_values then
-    acceptor = function(param_value)
+
+      return nil, control_param.error_status, control_param.error_msg
+    end,
+
+    ["table"] = function(param_value)
       local found
-      for _, acceptable_value in ipairs(control_param.acceptable_values) do
+      for _, acceptable_value in ipairs(control_param.acceptor) do
         if param_value == acceptable_value then
           found = param_value
           break
         end
       end
 
-      if not found then
-        return nil, control_param.error_status, control_param.error_msg
+      if found ~= nil then
+        return found
       end
-      return found
-    end
-  else
-    acceptor = function(param_value)
+
+      return nil, control_param.error_status, control_param.error_msg
+    end,
+
+    ["function"] = function(param_value)
+      local val, status, msg = control_param.acceptor(param_value)
+
+      if val ~= nil then
+        return val
+      end
+
+      assert_arg_type(status, {"number", "nil"})
+      assert_arg_type(msg, {"string", "nil"})
+
+      return nil, status or control_param.error_status,
+             msg or control_param.error_msg
+    end,
+
+    ["nil"] = function(param_value)
       return param_value
-    end
-  end
+    end,
+  }
+
+  local acceptor_type = type(control_param.acceptor)
 
   return control_param.name, function(param_value)
-    if param_value then
-      return acceptor(param_value)
+    if param_value ~= nil then
+      return filter_by_acceptor_type[acceptor_type](param_value)
     elseif control_param.is_required then
       return nil, control_param.error_status, control_param.error_msg
     end
@@ -228,42 +239,38 @@ function handler:check_signature(path_token_list)
   return retval_map
 end
 
--- @param headers table of request headers
--- @return true in success, otherwise nil, error http status and error message (optional)
-function handler:filter_headers(headers)
-  for name, filter in pairs(self.header_filters) do
-    local filtered, status, msg = filter(headers[name])
+local function filter_table(input, filters)
+  for name, filter in pairs(filters) do
+    local filtered, status, msg = filter(input[name])
+
     -- NOTE that header can be not required, then it return nil, but without status and message
     if filtered == nil and status ~= nil then
       return nil, status, msg
     end
 
-    headers[name] = filtered
+    input[name] = filtered
   end
 
   return true
 end
 
+-- @param headers table of request headers
+-- @return true in success, otherwise nil, error http status and error message (optional)
+function handler:filter_headers(headers)
+  return filter_table(headers, self.header_filters)
+end
+
 function handler:filter_arguments(arguments)
-  for name, filter in pairs(self.argument_filters) do
-    local filtered, status, msg = filter(arguments[name])
-    -- NOTE that argument can be not required, then it return nil, but without status and message
-    if filtered == nil and status ~= nil then
-      return nil, status, msg
-    end
-
-    arguments[name] = filtered
-  end
-
-  return true
+  return filter_table(arguments, self.argument_filters)
 end
 
 function handler:filter_body(body)
   local out_body, status, err_msg = self.body_filter(body)
-  if out_body == nil then
-    return nil, status or HTTP_BAD_REQUEST, err_msg
+  if out_body ~= nil then
+    return out_body
   end
-  return out_body
+
+  return nil, status or HTTP_BAD_REQUEST, err_msg
 end
 
 -- @param special_path_values table with keys and values defined by special tokens in uri path (<key>)
@@ -342,15 +349,7 @@ function filter_builder:accept(acceptor)
   self.assert_arg_type(acceptor, {"string", "stringlist", "function"},
                        "invalid values in accept method")
 
-  local acceptor_type = type(acceptor)
-  if acceptor_type == "table" then
-    self.acceptable_values = acceptor
-  elseif acceptor_type == "string" then
-    self.acceptable_values = {acceptor}
-  elseif acceptor_type == "function" then
-    self.filter_function = acceptor
-  end
-
+  self.acceptor = acceptor
   return self
 end
 
