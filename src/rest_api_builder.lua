@@ -136,11 +136,15 @@ local function create_signature_token_acceptor(signature_token)
     end
     return function(path_token)
       local out, err = ngx.re.match(path_token, regex)
-      if out == nil then
-        ngx.log(ngx.ERR, "invalid regex: ", err)
-        return nil
+      if out ~= nil then
+        return true, key, path_token
       end
-      return true, key, path_token
+
+      if err then
+        ngx.log(ngx.ERR, "invalid regex: ", err)
+      end
+
+      return nil
     end
   else
     return function(path_token)
