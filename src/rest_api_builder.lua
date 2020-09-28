@@ -268,8 +268,8 @@ function handler:filter_arguments(arguments)
   return filter_table(arguments, self.argument_filters)
 end
 
-function handler:filter_body(body)
-  local out_body, status, err_msg = self.body_filter(body)
+function handler:filter_body(body, headers)
+  local out_body, status, err_msg = self.body_filter(body, headers)
   if out_body ~= nil then
     return out_body
   end
@@ -485,8 +485,9 @@ end
 -- @param control_headers not required, list of filters for headers, created by filter_builder @see filter
 -- @param control_arguments not required, list of filters, created by argument_builder @see filter
 -- @param ignore_body boolean, by default is `false`. Set to `true` for don't read a body
--- @param body_filter not required, function that get one argument: request body as string - return filtered body
--- or nil, http status and error message if check failed. If returned http status is nil, then set default status 400
+-- @param body_filter not required, function that get two arguments: request body as string and request headers. Return
+-- filtered body or nil, http status and error message if check failed. If returned http status is nil, then set default
+-- status 400
 -- @param callback function, which will call if request path match by signature. First argument is a map with special
 -- values getted from path by signature, second is table of uri_args, third is a headers_table and fourth is a body
 -- @param description
@@ -719,7 +720,7 @@ function product_api:handle_request(method, path)
     body = ngx.req.get_body_data() or ""
   end
 
-  body, status, err_msg = handler_obj:filter_body(body)
+  body, status, err_msg = handler_obj:filter_body(body, request_headers)
   if body == nil then
     return self.error_handler(status, err_msg)
   end
