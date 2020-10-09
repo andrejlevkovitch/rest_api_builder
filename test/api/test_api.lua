@@ -28,7 +28,7 @@ api_builder:create_endpoint_t{
   version = "v1",
   method = "PUT",
   path_signature = "/test/api/<n>",
-  header_filters = {api_builder:filter("Content-Type"):required(false):accept(
+  header_filters = {api_builder.filter("Content-Type"):required(false):accept(
     {"text/plain", "application/json"}):error_code(413):error_message(
     "invalid content-type"):get_product()},
 

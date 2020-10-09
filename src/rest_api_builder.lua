@@ -85,20 +85,25 @@ local function check_type(val, need_type)
   return special_type_map[need_type](val)
 end
 
+local function assert_arg_types(arg, typenames, msg)
+  assert(
+    check_type(typenames, "stringlist", "invalid usage of assert_arg_type!"))
+
+  for _, type_n in ipairs(typenames) do
+    if check_type(arg, type_n) == true then
+      return
+    end
+  end
+
+  assert(false, msg)
+end
+
 local function assert_arg_type(arg, typename, msg)
   if type(typename) == "string" then
-    assert(check_type(arg, typename), msg)
-  elseif check_type(typename, "stringlist") then
-    for _, type_n in ipairs(typename) do
-      if check_type(arg, type_n) == true then
-        return
-      end
-    end
-
-    assert(false, msg)
-  else
-    error("invalid usage of assert_arg_type")
+    return assert_arg_types(arg, {typename}, msg)
   end
+
+  return assert_arg_types(arg, typename, msg)
 end
 
 --- split url by `/`
@@ -265,24 +270,12 @@ local filter_builder = {
   error_msg = nil,
 }
 
-function filter_builder.new(param_name, need_debug)
-  if not need_debug then
-    return setmetatable({
-      name = param_name,
-      assert_arg_type = function()
-      end,
-    }, {__index = filter_builder})
-  else
-    return setmetatable({
-      name = param_name,
-      assert_arg_type = assert_arg_type,
-      is_debug = true,
-    }, {__index = filter_builder})
-  end
+function filter_builder.new(param_name)
+  return setmetatable({name = param_name}, {__index = filter_builder})
 end
 
 function filter_builder:required(is_required)
-  self.assert_arg_type(is_required, "boolean", "required param must be boolean")
+  assert_arg_type(is_required, "boolean", "required param must be boolean")
 
   self.is_required = is_required
   return self
@@ -294,8 +287,8 @@ end
 -- @see error_code
 -- @warning second call remove previous values
 function filter_builder:accept(acceptor)
-  self.assert_arg_type(acceptor, {"string", "stringlist", "function"},
-                       "invalid values in accept method")
+  assert_arg_type(acceptor, {"string", "stringlist", "function"},
+                  "invalid values in accept method")
 
   self.acceptor = acceptor
   return self
@@ -303,16 +296,16 @@ end
 
 -- @param status http return status that will return if check failed. By default is 412 - "precondition failed"
 function filter_builder:error_code(status)
-  self.assert_arg_type(status, "number",
-                       "invalid status in error_code of filter_builder")
+  assert_arg_type(status, "number",
+                  "invalid status in error_code of filter_builder")
   self.error_status = status
   return self
 end
 
 -- @param msg default error message
 function filter_builder:error_message(msg)
-  self.assert_arg_type(msg, {"string"},
-                       "invalid message in error_message of filter_builder")
+  assert_arg_type(msg, {"string"},
+                  "invalid message in error_message of filter_builder")
   self.error_msg = msg
   return self
 end
@@ -383,40 +376,27 @@ function filter_builder:get_product()
   return setmetatable({name, filter}, FILTER_METATABLE)
 end
 
--- @param need_debug boolean, false by default
-function M.new(need_debug)
-  if not need_debug then
-    return setmetatable({
-      handlers = {},
-      options = {},
-      assert_arg_type = function()
-      end,
-      common_headers = nil,
-    }, {__index = M})
-  else
-    return setmetatable({
-      handlers = {},
-      options = {},
-      assert_arg_type = assert_arg_type,
-      is_debug = true,
-      common_headers = nil,
-      passed_endpoint_signatures = {},
-    }, {__index = M})
-  end
+-- @return param filter builder object
+-- @warning for finish building filter you need call get_product method
+function M.filter(param_name)
+  assert_arg_type(param_name, "string", "invalid param_name")
+
+  return filter_builder.new(param_name)
 end
 
---- construct param checker
--- @return param builder object
-function M:filter(param_name)
-  self.assert_arg_type(param_name, "string", "invalid param_name")
-
-  return filter_builder.new(param_name, self.is_debug)
+function M.new()
+  return setmetatable({
+    handlers = {},
+    options = {},
+    common_headers = nil,
+    passed_endpoint_signatures = {}, -- guaranty that all endpoints are unique
+  }, {__index = M})
 end
 
 --- set control headers that will be checks for every endpoint, created after calling this function
 -- @warning second call this function rewrite previous headers
 function M:set_common_headers(header_filters)
-  self.assert_arg_type(header_filters, "table", "invalid header_filters")
+  assert_arg_type(header_filters, "table", "invalid header_filters")
 
   self.common_headers = header_filters
 end
@@ -513,29 +493,27 @@ function M:create_endpoint(version,
                            body_filter,
                            callback,
                            description)
-  self.assert_arg_type(version, "string", "invalid version")
-  self.assert_arg_type(method, "string", "invalid method")
-  self.assert_arg_type(path_signature, "string", "invalid path_signature")
-  self.assert_arg_type(header_filters, {"filterlist", "nil"},
-                       "invalid header_filters")
-  self.assert_arg_type(arg_filters, {"filterlist", "nil"}, "invalid arg_filters")
-  self.assert_arg_type(ignore_body, {"boolean", "nil"}, "invalid ignore_body")
-  self.assert_arg_type(body_filter, {"function", "nil"}, "invalid body_filter")
-  self.assert_arg_type(callback, "function", "invalid callback")
-  self.assert_arg_type(description, {"string", "nil"}, "invalid description")
+  assert_arg_type(version, "string", "invalid version")
+  assert_arg_type(method, "string", "invalid method")
+  assert_arg_type(path_signature, "string", "invalid path_signature")
+  assert_arg_type(header_filters, {"filterlist", "nil"},
+                  "invalid header_filters")
+  assert_arg_type(arg_filters, {"filterlist", "nil"}, "invalid arg_filters")
+  assert_arg_type(ignore_body, {"boolean", "nil"}, "invalid ignore_body")
+  assert_arg_type(body_filter, {"function", "nil"}, "invalid body_filter")
+  assert_arg_type(callback, "function", "invalid callback")
+  assert_arg_type(description, {"string", "nil"}, "invalid description")
 
-  if self.is_debug then
-    if try_add_unique_endpoint(self, version, method, path_signature) == nil then
-      error(string.format("endpoint with same signature already set: %s %s %s",
-                          version, method, path_signature))
-    end
+  if try_add_unique_endpoint(self, version, method, path_signature) == nil then
+    error(string.format("endpoint with same signature already set: %s %s %s",
+                        version, method, path_signature))
   end
 
   -- add version header as required
   if header_filters == nil then
     header_filters = {}
   end
-  table.insert(header_filters, self:filter(C_VERSION_HEADER_NAME):required(true)
+  table.insert(header_filters, self.filter(C_VERSION_HEADER_NAME):required(true)
                  :accept(version):get_product())
 
   -- and append default control headers if they are set
@@ -578,26 +556,24 @@ end
 -- @warning in debug mode this method can produce error about unexpected key in arg_table - so, if you need append some
 -- new keys for documentation or by other reason, you need override this method. Or don't use debug mode
 function M:create_endpoint_t(arg_table)
-  self.assert_arg_type(arg_table, "table", "invalid arg_table")
+  assert_arg_type(arg_table, "table", "invalid arg_table")
 
-  if self.is_debug then -- check that all params in table are acceptable
-    local oneOf = function(val, t)
-      for _, item in ipairs(t) do
-        if val == item then
-          return true
-        end
+  -- check that all params in table are acceptable
+  local oneOf = function(val, t)
+    for _, item in ipairs(t) do
+      if val == item then
+        return true
       end
-      return nil
     end
+    return nil
+  end
 
-    for key in pairs(arg_table) do
-      if not oneOf(key,
-                   {"version", "method", "path_signature", "header_filters",
-                    "arg_filters", "ignore_body", "body_filter", "callback",
-                    "description"}) then
-        self.assert_arg_type(key, "nil",
-                             "DBG - unexpected key in arg_table: " .. key)
-      end
+  for key in pairs(arg_table) do
+    if not oneOf(key,
+                 {"version", "method", "path_signature", "header_filters",
+                  "arg_filters", "ignore_body", "body_filter", "callback",
+                  "description"}) then
+      assert_arg_type(key, "nil", "unexpected key in arg_table: " .. key)
     end
   end
 
@@ -612,7 +588,7 @@ end
 -- http_code (required) and err_msg (not required). If you not set you own handler will use default, that just print
 -- error message in response body as plain text
 function M:set_error_handler(err_handler)
-  self.assert_arg_type(err_handler, "function", "invalid error handler")
+  assert_arg_type(err_handler, "function", "invalid error handler")
   self.error_handler = err_handler
 end
 
@@ -654,9 +630,9 @@ local product_api = {error_handler = nil}
 
 -- @return required handler and map with path special values. If handler not found return nil
 function product_api:get_handler(version, method, path)
-  self.assert_arg_type(version, "string", "invalid version")
-  self.assert_arg_type(method, "string", "invalid method")
-  self.assert_arg_type(path, "string", "invalid path")
+  assert_arg_type(version, "string", "invalid version")
+  assert_arg_type(method, "string", "invalid method")
+  assert_arg_type(path, "string", "invalid path")
 
   local version_handlers = self.handlers[version]
   if version_handlers == nil then
@@ -686,8 +662,8 @@ end
 -- @warning you must call it after creating endpoints!
 -- @warning path should be unescaped @see ngx.unescape_uri
 function product_api:handle_request(method, path)
-  self.assert_arg_type(method, "string", "invalid method")
-  self.assert_arg_type(path, "string", "invalid path")
+  assert_arg_type(method, "string", "invalid method")
+  assert_arg_type(path, "string", "invalid path")
 
   local request_headers = ngx.req.get_headers()
 
@@ -744,8 +720,6 @@ function M:get_product()
 
   return setmetatable({
     handlers = self.handlers,
-    is_debug = self.is_debug,
-    assert_arg_type = self.assert_arg_type,
     error_handler = self.error_handler,
   }, {__index = product_api})
 end
