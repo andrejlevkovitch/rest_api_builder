@@ -40,4 +40,6 @@ api_builder:create_endpoint_t{
   ]],
 }
 
+api_builder:generate_options_endpoints()
+
 return api_builder:get_product()

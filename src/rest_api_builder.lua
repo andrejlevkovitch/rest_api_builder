@@ -3,16 +3,13 @@
 local ngx = require("ngx")
 
 --- represent api builder
-local M = {
-  -- default error handler just print error message to body as plain text
-  error_handler = function(http_code, msg)
-    ngx.status = http_code
-    if msg then
-      ngx.header["Content-Type"] = "text/plain"
-      ngx.print(msg)
-    end
-  end,
-}
+local M = {}
+
+--- represent filters
+local filter_builder = {}
+
+--- represent product of api_builder
+local product_api = {}
 
 local HTTP_BAD_REQUEST = 400 -- default return status for body_filter fail
 local HTTP_NOT_FOUND = 404
@@ -170,8 +167,8 @@ end
 -- @param header_filters list of filters for http headers
 -- @param arg_filters list of filters for url arguments
 function handler.new(signature_str,
-                     header_filters,
                      arg_filters,
+                     header_filters,
                      ignore_body,
                      body_filter,
                      callback)
@@ -261,17 +258,14 @@ function handler:handle(special_path_values,
   return self.callback(special_path_values, uri_args, request_headers, body)
 end
 
-local filter_builder = {
-  name = nil,
-  is_required = nil,
-  acceptable_values = nil,
-  filter_function = nil,
-  error_status = HTTP_PRECONDITION_FAILED,
-  error_msg = nil,
-}
-
 function filter_builder.new(param_name)
-  return setmetatable({name = param_name}, {__index = filter_builder})
+  return setmetatable({
+    name = param_name,
+    is_required = false,
+    acceptor = nil,
+    error_status = HTTP_PRECONDITION_FAILED,
+    error_msg = nil,
+  }, {__index = filter_builder})
 end
 
 function filter_builder:required(is_required)
@@ -386,36 +380,26 @@ end
 
 function M.new()
   return setmetatable({
-    handlers = {},
-    options = {},
-    common_headers = nil,
+    common_headers = {},
     passed_endpoint_signatures = {}, -- guaranty that all endpoints are unique
+    endpoints = {},
+
+    error_handler = function(http_code, msg) -- default error handler just print error message to body as plain text
+      ngx.status = http_code
+      if msg then
+        ngx.header["Content-Type"] = "text/plain"
+        ngx.print(msg)
+      end
+    end,
   }, {__index = M})
 end
 
 --- set control headers that will be checks for every endpoint, created after calling this function
 -- @warning second call this function rewrite previous headers
 function M:set_common_headers(header_filters)
-  assert_arg_type(header_filters, "table", "invalid header_filters")
+  assert_arg_type(header_filters, "filterlist", "invalid header_filters")
 
   self.common_headers = header_filters
-end
-
--- @return table of handlers. If version or method (or both) tables not exists, then it will be created
-local function get_handler_list(self, version, method)
-  local version_handlers = self.handlers[version]
-  if version_handlers == nil then
-    self.handlers[version] = {[method] = {}}
-    return self.handlers[version][method]
-  end
-
-  local method_handlers = version_handlers[method]
-  if method_handlers == nil then
-    version_handlers[method] = {}
-    return version_handlers[method]
-  end
-
-  return method_handlers
 end
 
 --- signatures with different names of special keys can be equal, for example: "/tmp/<name>" and "/tmp/<n>" - this
@@ -424,31 +408,6 @@ end
 -- @return simplified signature as string
 local function simplify_signature(path_signature)
   return string.gsub(path_signature, "<[^>]*>", "<ph>")
-end
-
--- @param headers list of header names
-local function add_options_info(self,
-                                version,
-                                path_signature,
-                                method,
-                                header_names)
-  local simplified_signature = simplify_signature(path_signature)
-
-  local version_options = self.options[version]
-  if version_options == nil then
-    self.options[version] = {}
-    version_options = self.options[version]
-  end
-  local path_options = version_options[simplified_signature]
-  if path_options == nil then
-    version_options[simplified_signature] = {methods = {}, headers = {}}
-    path_options = version_options[simplified_signature]
-  end
-
-  path_options.methods[method] = true
-  for _, header_name in ipairs(header_names) do
-    path_options.headers[header_name] = true
-  end
 end
 
 -- @return true if signature was added to list of passed signatures, otherwise return nil - it means that same signature
@@ -509,45 +468,33 @@ function M:create_endpoint(version,
                         version, method, path_signature))
   end
 
-  -- add version header as required
-  if header_filters == nil then
-    header_filters = {}
-  end
-  table.insert(header_filters, self.filter(C_VERSION_HEADER_NAME):required(true)
-                 :accept(version):get_product())
+  local new_endpoint = {
+    version = version,
 
-  -- and append default control headers if they are set
-  if self.common_headers ~= nil then
-    for _, header in ipairs(self.common_headers) do
-      table.insert(header_filters, header)
-    end
-  end
+    method = method,
+    path_signature = path_signature,
+    arg_filters = arg_filters or {},
+    header_filters = header_filters or {},
 
-  -- set default empty table for arg_filters
-  if arg_filters == nil then
-    arg_filters = {}
-  end
-
-  -- by default body_filter always return body without any changes
-  if body_filter == nil then
-    body_filter = function(body)
+    ignore_body = ignore_body,
+    body_filter = body_filter or function(body)
       return body
-    end
+    end,
+
+    callback = callback,
+  }
+
+  -- append version header filter
+  table.insert(new_endpoint.header_filters,
+               self.filter(C_VERSION_HEADER_NAME):required(true):accept(version)
+                 :get_product())
+
+  -- and append common header filters
+  for _, common_filter in ipairs(self.common_headers) do
+    table.insert(new_endpoint.header_filters, common_filter)
   end
 
-  -- append handler to handler list
-  local handler_obj = handler.new(path_signature, header_filters, arg_filters,
-                                  ignore_body, body_filter, callback)
-
-  local handlers = get_handler_list(self, version, method)
-  table.insert(handlers, handler_obj)
-
-  -- also automaticly add data for OPTIONS response
-  local header_names = {}
-  for _, header in ipairs(header_filters) do
-    table.insert(header_names, header.name)
-  end
-  add_options_info(self, version, path_signature, method, header_names)
+  table.insert(self.endpoints, new_endpoint)
 end
 
 --- same as create_endpoint, but take table as argument
@@ -592,9 +539,49 @@ function M:set_error_handler(err_handler)
   self.error_handler = err_handler
 end
 
---- automaticly create endpoints for handling OPTIONS verb. If you don't need option endpoints, just redefine it
+-- @param headers list of header names
+local function add_options_info(options,
+                                version,
+                                path_signature,
+                                method,
+                                header_names)
+  local simplified_signature = simplify_signature(path_signature)
+
+  local version_options = options[version]
+  if version_options == nil then
+    options[version] = {}
+    version_options = options[version]
+  end
+  local path_options = version_options[simplified_signature]
+  if path_options == nil then
+    version_options[simplified_signature] = {methods = {}, headers = {}}
+    path_options = version_options[simplified_signature]
+  end
+
+  path_options.methods[method] = true
+  for _, header_name in ipairs(header_names) do
+    path_options.headers[header_name] = true
+  end
+end
+
+--- automaticly create endpoints for handling OPTIONS verb
 function M:generate_options_endpoints()
-  for version, version_options in pairs(self.options) do
+  local options = {}
+
+  for _, endpoint in ipairs(self.endpoints) do
+    local header_names = {}
+    for _, header_filter in ipairs(endpoint.header_filters) do
+      local name = header_filter[1]
+      table.insert(header_names, name)
+    end
+
+    add_options_info(options, endpoint.version, endpoint.path_signature,
+                     endpoint.method, header_names)
+  end
+
+  --------------------------------------
+
+  for version, version_options in pairs(options) do
     for path_signature, data_options in pairs(version_options) do
       local acceptable_methods = {}
       for method in pairs(data_options.methods) do
@@ -625,8 +612,48 @@ function M:generate_options_endpoints()
   end
 end
 
---- represent product of api_builder
-local product_api = {error_handler = nil}
+-- @return table of handlers. If version or method (or both) tables not exists, then it will be created
+local function get_handler_list(handlers, version, method)
+  local version_handlers = handlers[version]
+  if version_handlers == nil then
+    handlers[version] = {[method] = {}}
+    return handlers[version][method]
+  end
+
+  local method_handlers = version_handlers[method]
+  if method_handlers == nil then
+    version_handlers[method] = {}
+    return version_handlers[method]
+  end
+
+  return method_handlers
+end
+
+local function build_endpoint_handlers(endpoints)
+  local retval = {}
+
+  for _, endpoint in ipairs(endpoints) do
+    local handler_obj = handler.new(endpoint.path_signature,
+                                    endpoint.arg_filters,
+                                    endpoint.header_filters,
+                                    endpoint.ignore_body, endpoint.body_filter,
+                                    endpoint.callback)
+
+    local handler_list = get_handler_list(retval, endpoint.version,
+                                          endpoint.method)
+    table.insert(handler_list, handler_obj)
+  end
+
+  return retval
+end
+
+--- finish building and return builded api object
+function M:get_product()
+  return setmetatable({
+    handlers = build_endpoint_handlers(self.endpoints),
+    error_handler = self.error_handler,
+  }, {__index = product_api})
+end
 
 -- @return required handler and map with path special values. If handler not found return nil
 function product_api:get_handler(version, method, path)
@@ -712,16 +739,6 @@ function product_api:handle_request(method, path)
                      body)
 
   return ngx.exit(ngx.OK)
-end
-
---- finish building and return builded api object
-function M:get_product()
-  self:generate_options_endpoints()
-
-  return setmetatable({
-    handlers = self.handlers,
-    error_handler = self.error_handler,
-  }, {__index = product_api})
 end
 
 return M
