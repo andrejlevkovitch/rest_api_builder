@@ -16,7 +16,7 @@ local M = {
 
 local HTTP_BAD_REQUEST = 400 -- default return status for body_filter fail
 local HTTP_NOT_FOUND = 404
-local HTTP_NOT_ACCEPTABLE = 406 -- return in case if api_version not acceptable
+local HTTP_NOT_ACCEPTABLE = 406 -- return in case if version not acceptable
 local HTTP_PRECONDITION_FAILED = 412 -- default return status for header_acceptor fail
 
 local C_VERSION_HEADER_NAME = "Accept-Version"
@@ -574,7 +574,7 @@ end
 
 --- same as create_endpoint, but take table as argument
 -- @see create_endpoint
--- @usage api.create_endpoint{api_version = "v1", method = "GET", path_signature = "/hello/<name>", callback = foo}
+-- @usage api.create_endpoint{version = "v1", method = "GET", path_signature = "/hello/<name>", callback = foo}
 -- @warning in debug mode this method can produce error about unexpected key in arg_table - so, if you need append some
 -- new keys for documentation or by other reason, you need override this method. Or don't use debug mode
 function M:create_endpoint_t(arg_table)
@@ -592,7 +592,7 @@ function M:create_endpoint_t(arg_table)
 
     for key in pairs(arg_table) do
       if not oneOf(key,
-                   {"api_version", "method", "path_signature", "header_filters",
+                   {"version", "method", "path_signature", "header_filters",
                     "arg_filters", "ignore_body", "body_filter", "callback",
                     "description"}) then
         self.assert_arg_type(key, "nil",
@@ -601,7 +601,7 @@ function M:create_endpoint_t(arg_table)
     end
   end
 
-  return self:create_endpoint(arg_table.api_version, arg_table.method,
+  return self:create_endpoint(arg_table.version, arg_table.method,
                               arg_table.path_signature,
                               arg_table.header_filters, arg_table.arg_filters,
                               arg_table.ignore_body, arg_table.body_filter,
@@ -631,7 +631,7 @@ function M:generate_options_endpoints()
       end
 
       self:create_endpoint_t{
-        api_version = version,
+        version = version,
         method = "OPTIONS",
         path_signature = path_signature,
         ignore_body = true,

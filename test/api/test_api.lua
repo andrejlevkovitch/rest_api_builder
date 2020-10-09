@@ -9,7 +9,7 @@ end)
 
 -- XXX this version include all variants
 api_builder:create_endpoint_t{
-  api_version = "v1",
+  version = "v1",
   method = "GET",
   path_signature = "/test/api/<name>",
   ignore_body = true,
@@ -25,7 +25,7 @@ api_builder:create_endpoint_t{
 }
 
 api_builder:create_endpoint_t{
-  api_version = "v1",
+  version = "v1",
   method = "PUT",
   path_signature = "/test/api/<n>",
   header_filters = {api_builder:filter("Content-Type"):required(false):accept(
