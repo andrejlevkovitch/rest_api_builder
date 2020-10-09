@@ -1,10 +1,11 @@
 local ngx = require("ngx")
+local cjson = require("cjson")
 
-local api_builder = require("rest_api_builder").new(true)
+local api_builder = require("rest_api_builder").new()
 
 api_builder:set_error_handler(function(http_code, err_msg)
   ngx.status = http_code
-  ngx.print("some error caused")
+  ngx.print(err_msg or "some error caused")
 end)
 
 -- XXX this version include all variants
@@ -38,6 +39,20 @@ api_builder:create_endpoint_t{
   description = [[
 @brief does nothing
   ]],
+}
+
+local documentation = cjson.encode(api_builder:gen_doc())
+
+api_builder:create_endpoint_t{
+  version = "v1",
+  method = "GET",
+  path_signature = "/test/api/doc/doc",
+  callback = function()
+
+    ngx.header["Content-Type"] = "application/json"
+    ngx.header["Content-Length"] = #documentation
+    ngx.print(documentation)
+  end,
 }
 
 api_builder:generate_options_endpoints()

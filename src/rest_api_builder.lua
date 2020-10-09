@@ -304,6 +304,35 @@ function filter_builder:error_message(msg)
   return self
 end
 
+function filter_builder:gen_doc()
+  local accept_doc_gen_t = setmetatable({
+    ["table"] = function(val)
+      return val
+    end,
+    ["string"] = function(val)
+      return {val}
+    end,
+  }, {
+    __index = function()
+      return function()
+        return nil
+      end
+    end,
+  })
+
+  local get_acceptable_values = function(acceptor)
+    return accept_doc_gen_t[type(acceptor)](acceptor)
+  end
+
+  return {
+    name = self.name,
+    is_required = self.is_required,
+    default_error_code = self.error_status,
+    default_error_message = self.error_msg,
+    acceptable_values = get_acceptable_values(self.acceptor),
+  }
+end
+
 -- @return two values: name of parameter and acceptor function (has one argument - parameter value)
 -- @warning acceptor function return filtered value in case of success, nil and status (and can be message) in case of
 -- error, and nil in case if value is not required and it is not set
@@ -367,7 +396,7 @@ end
 -- @return filter as pair of key-value where key is name of param and value is acceptor
 function filter_builder:get_product()
   local name, filter = create_param_filter(self)
-  return setmetatable({name, filter}, FILTER_METATABLE)
+  return setmetatable({name, filter, self:gen_doc()}, FILTER_METATABLE)
 end
 
 -- @return param filter builder object
@@ -482,6 +511,8 @@ function M:create_endpoint(version,
     end,
 
     callback = callback,
+
+    description = description,
   }
 
   -- append version header filter
@@ -653,6 +684,37 @@ function M:get_product()
     handlers = build_endpoint_handlers(self.endpoints),
     error_handler = self.error_handler,
   }, {__index = product_api})
+end
+
+local function doc_from_filters(filters)
+  local retval = {}
+  for _, filter in ipairs(filters) do
+    table.insert(retval, filter[3])
+  end
+
+  return retval;
+end
+
+-- @return documentation table. Can be encoded to json
+function M:gen_doc()
+  local retval = {}
+
+  for _, endpoint in ipairs(self.endpoints) do
+    retval[endpoint.version] = retval[endpoint.version] or {}
+
+    local header_filters_doc = doc_from_filters(endpoint.header_filters)
+    local arg_filters_doc = doc_from_filters(endpoint.arg_filters)
+
+    table.insert(retval[endpoint.version], {
+      method = endpoint.method,
+      path_signature = endpoint.path_signature,
+      headers = header_filters_doc,
+      args = arg_filters_doc,
+      description = endpoint.description,
+    })
+  end
+
+  return retval
 end
 
 -- @return required handler and map with path special values. If handler not found return nil

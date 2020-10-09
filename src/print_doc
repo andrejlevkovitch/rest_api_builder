@@ -9,8 +9,8 @@ local function print_endpoint(endpoint_table)
   assert(type(endpoint_table) == "table")
 
   print(endpoint_table.method .. " " .. endpoint_table.path_signature)
-  if endpoint_table.control_headers then
-    for _, header in ipairs(endpoint_table.control_headers) do
+  if endpoint_table.headers then
+    for _, header in ipairs(endpoint_table.headers) do
       local acceptable_values_str = ""
       if header.acceptable_values then
         local acceptable_values = {}
