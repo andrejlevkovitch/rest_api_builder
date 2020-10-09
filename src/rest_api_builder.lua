@@ -21,16 +21,7 @@ local HTTP_PRECONDITION_FAILED = 412 -- default return status for header_accepto
 
 local C_VERSION_HEADER_NAME = "Accept-Version"
 
-local filter_builder = {
-  name = nil,
-  is_required = nil,
-  acceptable_values = nil,
-  filter_function = nil,
-  error_status = HTTP_PRECONDITION_FAILED,
-  error_msg = nil,
-}
-
-local filter_metatable = {__index = filter_builder}
+local FILTER_METATABLE = {}
 
 local special_type_map = {
   -- list with string values
@@ -55,7 +46,7 @@ local special_type_map = {
   filter = function(arg)
     local mt = getmetatable(arg)
 
-    if mt == filter_metatable then
+    if mt == FILTER_METATABLE then
       return true
     else
       return false
@@ -69,7 +60,7 @@ local special_type_map = {
 
     for _, filter in ipairs(arg) do
       local mt = getmetatable(filter)
-      if mt ~= filter_metatable then
+      if mt ~= FILTER_METATABLE then
         return false
       end
     end
@@ -156,68 +147,48 @@ local function create_signature_token_acceptor(signature_token)
   end
 end
 
--- @return two values: name of parameter and acceptor function (has one argument - parameter value)
--- @warning acceptor function return filtered value in case of success, nil and status (and can be message) in case of
--- error, and nil in case if value is not required and it is not set
-local function create_param_filter(control_param)
-  local filter_by_acceptor_type = {
-    ["string"] = function(param_value)
-      if param_value == control_param.acceptor then
-        return param_value
-      end
-
-      return nil, control_param.error_status, control_param.error_msg
-    end,
-
-    ["table"] = function(param_value)
-      local found
-      for _, acceptable_value in ipairs(control_param.acceptor) do
-        if param_value == acceptable_value then
-          found = param_value
-          break
-        end
-      end
-
-      if found ~= nil then
-        return found
-      end
-
-      return nil, control_param.error_status, control_param.error_msg
-    end,
-
-    ["function"] = function(param_value)
-      local val, status, msg = control_param.acceptor(param_value)
-
-      if val ~= nil then
-        return val
-      end
-
-      assert_arg_type(status, {"number", "nil"})
-      assert_arg_type(msg, {"string", "nil"})
-
-      return nil, status or control_param.error_status,
-             msg or control_param.error_msg
-    end,
-
-    ["nil"] = function(param_value)
-      return param_value
-    end,
-  }
-
-  local acceptor_type = type(control_param.acceptor)
-
-  return control_param.name, function(param_value)
-    if param_value ~= nil then
-      return filter_by_acceptor_type[acceptor_type](param_value)
-    elseif control_param.is_required then
-      return nil, control_param.error_status, control_param.error_msg
-    end
-    return nil
-  end
-end
-
 --- represent request handler object
 local handler = {}
+
+--- transformate list of filters to map of filters
+local function filter_list_to_filter_map(filter_list)
+  local retval = {}
+  for _, acceptor in ipairs(filter_list) do
+    local param_name = acceptor[1]
+    local filter = acceptor[2]
+    retval[param_name] = filter
+  end
+  return retval
+end
+
+-- @return handler object for specifyed path signature
+-- @param header_filters list of filters for http headers
+-- @param arg_filters list of filters for url arguments
+function handler.new(signature_str,
+                     header_filters,
+                     arg_filters,
+                     ignore_body,
+                     body_filter,
+                     callback)
+  local signature_token_list = split_url(signature_str)
+  local signature = {}
+  for _, signature_token in ipairs(signature_token_list) do
+    local acceptor = create_signature_token_acceptor(signature_token)
+    table.insert(signature, acceptor)
+  end
+
+  local header_filter_map = filter_list_to_filter_map(header_filters)
+  local arg_filter_map = filter_list_to_filter_map(arg_filters)
+
+  return setmetatable({
+    signature = signature,
+    header_filters = header_filter_map,
+    argument_filters = arg_filter_map,
+    ignore_body = ignore_body,
+    body_filter = body_filter,
+    callback = callback,
+  }, {__index = handler})
+end
 
 --- check that url path is acceptable by signature
 -- @see create_signature_token_acceptor
@@ -285,41 +256,14 @@ function handler:handle(special_path_values,
   return self.callback(special_path_values, uri_args, request_headers, body)
 end
 
--- @return handler object for specifyed path signature
-function handler.new(signature_str,
-                     control_headers,
-                     control_arguments,
-                     ignore_body,
-                     body_filter,
-                     callback)
-  local signature_token_list = split_url(signature_str)
-  local signature = {}
-  for _, signature_token in ipairs(signature_token_list) do
-    local acceptor = create_signature_token_acceptor(signature_token)
-    table.insert(signature, acceptor)
-  end
-
-  local header_filters = {}
-  for _, header in ipairs(control_headers) do
-    local name, acceptor = create_param_filter(header)
-    header_filters[name] = acceptor
-  end
-
-  local argument_filters = {}
-  for _, argument in ipairs(control_arguments) do
-    local name, acceptor = create_param_filter(argument)
-    argument_filters[name] = acceptor
-  end
-
-  return setmetatable({
-    signature = signature,
-    header_filters = header_filters,
-    argument_filters = argument_filters,
-    ignore_body = ignore_body,
-    body_filter = body_filter,
-    callback = callback,
-  }, {__index = handler})
-end
+local filter_builder = {
+  name = nil,
+  is_required = nil,
+  acceptable_values = nil,
+  filter_function = nil,
+  error_status = HTTP_PRECONDITION_FAILED,
+  error_msg = nil,
+}
 
 function filter_builder.new(param_name, need_debug)
   if not need_debug then
@@ -327,13 +271,13 @@ function filter_builder.new(param_name, need_debug)
       name = param_name,
       assert_arg_type = function()
       end,
-    }, filter_metatable)
+    }, {__index = filter_builder})
   else
     return setmetatable({
       name = param_name,
       assert_arg_type = assert_arg_type,
       is_debug = true,
-    }, filter_metatable)
+    }, {__index = filter_builder})
   end
 end
 
@@ -373,6 +317,72 @@ function filter_builder:error_message(msg)
   return self
 end
 
+-- @return two values: name of parameter and acceptor function (has one argument - parameter value)
+-- @warning acceptor function return filtered value in case of success, nil and status (and can be message) in case of
+-- error, and nil in case if value is not required and it is not set
+local function create_param_filter(control_param)
+  local filter_by_acceptor_type = {
+    ["string"] = function(param_value)
+      if param_value == control_param.acceptor then
+        return param_value
+      end
+
+      return nil, control_param.error_status, control_param.error_msg
+    end,
+
+    ["table"] = function(param_value)
+      local found
+      for _, acceptable_value in ipairs(control_param.acceptor) do
+        if param_value == acceptable_value then
+          found = param_value
+          break
+        end
+      end
+
+      if found ~= nil then
+        return found
+      end
+
+      return nil, control_param.error_status, control_param.error_msg
+    end,
+
+    ["function"] = function(param_value)
+      local val, status, msg = control_param.acceptor(param_value)
+
+      if val ~= nil then
+        return val
+      end
+
+      assert_arg_type(status, {"number", "nil"})
+      assert_arg_type(msg, {"string", "nil"})
+
+      return nil, status or control_param.error_status,
+             msg or control_param.error_msg
+    end,
+
+    ["nil"] = function(param_value)
+      return param_value
+    end,
+  }
+
+  local acceptor_type = type(control_param.acceptor)
+
+  return control_param.name, function(param_value)
+    if param_value ~= nil then
+      return filter_by_acceptor_type[acceptor_type](param_value)
+    elseif control_param.is_required then
+      return nil, control_param.error_status, control_param.error_msg
+    end
+    return nil
+  end
+end
+
+-- @return filter as pair of key-value where key is name of param and value is acceptor
+function filter_builder:get_product()
+  local name, filter = create_param_filter(self)
+  return setmetatable({name, filter}, FILTER_METATABLE)
+end
+
 -- @param need_debug boolean, false by default
 function M.new(need_debug)
   if not need_debug then
@@ -405,10 +415,10 @@ end
 
 --- set control headers that will be checks for every endpoint, created after calling this function
 -- @warning second call this function rewrite previous headers
-function M:set_common_headers(control_headers)
-  self.assert_arg_type(control_headers, "table", "invalid control_headers")
+function M:set_common_headers(header_filters)
+  self.assert_arg_type(header_filters, "table", "invalid header_filters")
 
-  self.common_headers = control_headers
+  self.common_headers = header_filters
 end
 
 -- @return table of handlers. If version or method (or both) tables not exists, then it will be created
@@ -481,9 +491,8 @@ end
 -- @param path_signature url signature acceptable by the endpoint. Can contains special values in `<...>` - when path
 -- processes by the signature, then all the special keys will be put in map witch will be passed to callback as first
 -- argument
--- @param control_path_vars not required, list of filters for path values, created by filter_builder @see filter
--- @param control_headers not required, list of filters for headers, created by filter_builder @see filter
--- @param control_arguments not required, list of filters, created by argument_builder @see filter
+-- @param header_filters not required, list of filters for headers, created by filter_builder @see filter
+-- @param arg_filters not required, list of filters, created by argument_builder @see filter
 -- @param ignore_body boolean, by default is `false`. Set to `true` for don't read a body
 -- @param body_filter not required, function that get two arguments: request body as string and request headers. Return
 -- filtered body or nil, http status and error message if check failed. If returned http status is nil, then set default
@@ -498,8 +507,8 @@ end
 function M:create_endpoint(version,
                            method,
                            path_signature,
-                           control_headers,
-                           control_arguments,
+                           header_filters,
+                           arg_filters,
                            ignore_body,
                            body_filter,
                            callback,
@@ -507,10 +516,9 @@ function M:create_endpoint(version,
   self.assert_arg_type(version, "string", "invalid version")
   self.assert_arg_type(method, "string", "invalid method")
   self.assert_arg_type(path_signature, "string", "invalid path_signature")
-  self.assert_arg_type(control_headers, {"filterlist", "nil"},
-                       "invalid control_headers")
-  self.assert_arg_type(control_arguments, {"filterlist", "nil"},
-                       "invalid control_arguments")
+  self.assert_arg_type(header_filters, {"filterlist", "nil"},
+                       "invalid header_filters")
+  self.assert_arg_type(arg_filters, {"filterlist", "nil"}, "invalid arg_filters")
   self.assert_arg_type(ignore_body, {"boolean", "nil"}, "invalid ignore_body")
   self.assert_arg_type(body_filter, {"function", "nil"}, "invalid body_filter")
   self.assert_arg_type(callback, "function", "invalid callback")
@@ -524,22 +532,22 @@ function M:create_endpoint(version,
   end
 
   -- add version header as required
-  if control_headers == nil then
-    control_headers = {}
+  if header_filters == nil then
+    header_filters = {}
   end
-  table.insert(control_headers, self:filter(C_VERSION_HEADER_NAME)
-                 :required(true):accept(version))
+  table.insert(header_filters, self:filter(C_VERSION_HEADER_NAME):required(true)
+                 :accept(version):get_product())
 
   -- and append default control headers if they are set
   if self.common_headers ~= nil then
     for _, header in ipairs(self.common_headers) do
-      table.insert(control_headers, header)
+      table.insert(header_filters, header)
     end
   end
 
-  -- set default empty table for control_arguments
-  if control_arguments == nil then
-    control_arguments = {}
+  -- set default empty table for arg_filters
+  if arg_filters == nil then
+    arg_filters = {}
   end
 
   -- by default body_filter always return body without any changes
@@ -550,16 +558,15 @@ function M:create_endpoint(version,
   end
 
   -- append handler to handler list
-  local handler_obj = handler.new(path_signature, control_headers,
-                                  control_arguments, ignore_body, body_filter,
-                                  callback)
+  local handler_obj = handler.new(path_signature, header_filters, arg_filters,
+                                  ignore_body, body_filter, callback)
 
   local handlers = get_handler_list(self, version, method)
   table.insert(handlers, handler_obj)
 
   -- also automaticly add data for OPTIONS response
   local header_names = {}
-  for _, header in ipairs(control_headers) do
+  for _, header in ipairs(header_filters) do
     table.insert(header_names, header.name)
   end
   add_options_info(self, version, path_signature, method, header_names)
@@ -585,9 +592,9 @@ function M:create_endpoint_t(arg_table)
 
     for key in pairs(arg_table) do
       if not oneOf(key,
-                   {"api_version", "method", "path_signature",
-                    "control_headers", "control_arguments", "ignore_body",
-                    "body_filter", "callback", "description"}) then
+                   {"api_version", "method", "path_signature", "header_filters",
+                    "arg_filters", "ignore_body", "body_filter", "callback",
+                    "description"}) then
         self.assert_arg_type(key, "nil",
                              "DBG - unexpected key in arg_table: " .. key)
       end
@@ -596,8 +603,7 @@ function M:create_endpoint_t(arg_table)
 
   return self:create_endpoint(arg_table.api_version, arg_table.method,
                               arg_table.path_signature,
-                              arg_table.control_headers,
-                              arg_table.control_arguments,
+                              arg_table.header_filters, arg_table.arg_filters,
                               arg_table.ignore_body, arg_table.body_filter,
                               arg_table.callback, arg_table.description)
 end
@@ -733,7 +739,7 @@ function product_api:handle_request(method, path)
 end
 
 --- finish building and return builded api object
-function M:get_product_api()
+function M:get_product()
   self:generate_options_endpoints()
 
   return setmetatable({
